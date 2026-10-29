@@ -57,7 +57,9 @@ a 30 fps frame-rate limit for each profile, but the camera still emits 15 fps; 6
 is not advertised.
 These capabilities are not regular-use acceptance yet.
 
-See [design and requirements](docs/design.md) for the planned recording and
-verified-transfer behavior. Continuous recording and event uploads are not implemented.
+See [design and requirements](docs/design.md) for planned independent multi-camera
+viewing, application accounts, saved startup preferences and bounded recording with
+verified delivery. These expanded capabilities are not implemented yet. The web
+runtime currently loads one configured camera per process.
 
 Run local checks with `PYTHONPATH=src python3 -m unittest discover -s tests`.
