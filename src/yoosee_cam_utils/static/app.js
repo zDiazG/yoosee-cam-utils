@@ -1,11 +1,7 @@
 const grid = document.querySelector('#camera-grid');
 const status = document.querySelector('#status');
-const selectedCamera = document.querySelector('#selected-camera');
 const autostart = document.querySelector('#autostart');
-const ptzDuration = document.querySelector('#ptz-duration');
-const ptzDurationValue = document.querySelector('#ptz-duration-value');
 const cameras = new Map();
-let ptzBusy = false;
 let editingUser = null;
 
 const AUTO_KEY = 'yoosee.autostart-full-hd';
@@ -57,6 +53,10 @@ function attach(camera, playlist) {
     camera.player.attachMedia(camera.video);
     camera.timer = setInterval(() => {
       if (generation !== camera.generation || !camera.player) return;
+      if (camera.video.paused) {
+        camera.latency.textContent = 'Playback paused; delay updates when playing';
+        return;
+      }
       const delay = camera.player.latency;
       camera.latency.textContent = Number.isFinite(delay) && delay > 0 ? `Player delay: ${delay.toFixed(1)} s behind HLS live edge` : 'Player delay: measuring…';
     }, 1000);
@@ -97,13 +97,7 @@ function renderCamera(item) {
   state.className = 'tile-state';
   state.textContent = item.active ? 'Stream active' : 'Stream stopped';
   identity.append(title, state);
-  const focus = document.createElement('button');
-  focus.type = 'button';
-  focus.className = 'button-quiet';
-  focus.textContent = 'PTZ controls';
-  focus.disabled = !item.can_control;
-  focus.onclick = () => { selectedCamera.value = item.id; selectedCamera.dispatchEvent(new Event('change')); document.querySelector('#ptz-title').scrollIntoView({behavior: 'smooth', block: 'center'}); };
-  heading.append(identity, focus);
+  heading.append(identity);
 
   const video = document.createElement('video');
   video.controls = true;
@@ -125,14 +119,61 @@ function renderCamera(item) {
   quality.setAttribute('aria-label', `${item.name || item.id} stream quality`);
   quality.disabled = !item.can_control;
   qualityLabel.append(quality);
-  const start = document.createElement('button');
-  start.textContent = 'Start stream';
-  start.className = 'button-primary';
-  const stop = document.createElement('button');
-  stop.textContent = 'Stop stream';
-  stop.className = 'button-secondary';
-  start.disabled = stop.disabled = !item.can_control;
-  controls.append(qualityLabel, start, stop);
+  const streamToggle = document.createElement('button');
+  streamToggle.type = 'button';
+  streamToggle.disabled = !item.can_control;
+  const cameraStreamToggle = streamToggle;
+  controls.append(qualityLabel, cameraStreamToggle);
+
+  const ptz = document.createElement('details');
+  ptz.className = 'ptz-inline';
+  ptz.hidden = !item.can_control;
+  const ptzSummary = document.createElement('summary');
+  ptzSummary.textContent = 'PTZ controls';
+  const ptzContent = document.createElement('div');
+  ptzContent.className = 'ptz-inline-content';
+  const ptzPad = document.createElement('div');
+  ptzPad.className = 'ptz-mini-pad';
+  ptzPad.setAttribute('aria-label', `${item.name || item.id} pan and tilt controls`);
+  const ptzDirections = [
+    null, ['0', '0.25', 'Tilt up'], null,
+    ['-0.25', '0', 'Pan left'], ['stop', 'stop', 'Stop'], ['0.25', '0', 'Pan right'],
+    null, ['0', '-0.25', 'Tilt down'], null,
+  ];
+  for (const direction of ptzDirections) {
+    if (!direction) {
+      const spacer = document.createElement('span');
+      spacer.setAttribute('aria-hidden', 'true');
+      ptzPad.append(spacer);
+      continue;
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = direction[2] === 'Stop' ? '■' : ({'Tilt up': '↑', 'Tilt down': '↓', 'Pan left': '←', 'Pan right': '→'}[direction[2]]);
+    button.setAttribute('aria-label', direction[2]);
+    button.title = direction[2];
+    if (direction[2] === 'Stop') button.className = 'ptz-stop';
+    button.onclick = () => direction[0] === 'stop' ? sendPtz(camera, 0, 0, 0, true) : sendPtz(camera, Number(direction[0]), Number(direction[1]), Number(ptzDuration.value));
+    ptzPad.append(button);
+  }
+  const ptzDurationLabel = document.createElement('label');
+  ptzDurationLabel.className = 'ptz-inline-duration';
+  ptzDurationLabel.append(document.createTextNode('Movement per click'));
+  const ptzDuration = document.createElement('input');
+  ptzDuration.type = 'range';
+  ptzDuration.min = '0.2';
+  ptzDuration.max = '1';
+  ptzDuration.step = '0.1';
+  ptzDuration.value = localStorage.getItem(`yoosee.ptz-duration:${item.id}`) || '0.8';
+  const ptzDurationValue = document.createElement('output');
+  ptzDurationValue.textContent = `${Number(ptzDuration.value).toFixed(1)} s`;
+  ptzDurationLabel.append(ptzDuration, ptzDurationValue);
+  ptzDuration.oninput = () => {
+    ptzDurationValue.textContent = `${Number(ptzDuration.value).toFixed(1)} s`;
+    localStorage.setItem(`yoosee.ptz-duration:${item.id}`, ptzDuration.value);
+  };
+  ptzContent.append(ptzPad, ptzDurationLabel);
+  ptz.append(ptzSummary, ptzContent);
 
   const recording = document.createElement('section');
   recording.className = 'recording-panel';
@@ -166,14 +207,11 @@ function renderCamera(item) {
   customMinutes.setAttribute('aria-label', 'Custom recording limit in minutes, maximum 720');
   customLabel.append(customMinutes);
   const record = document.createElement('button');
+  record.type = 'button';
   record.textContent = 'Start recording';
   record.className = 'button-record';
-  const stopRecord = document.createElement('button');
-  stopRecord.textContent = 'Stop recording';
-  stopRecord.className = 'button-stop-record';
-  stopRecord.hidden = true;
-  record.disabled = stopRecord.disabled = !item.can_control;
-  recordingActions.append(limitLabel, customLabel, record, stopRecord);
+  record.disabled = !item.can_control;
+  recordingActions.append(limitLabel, customLabel, record);
   const recordingInfo = document.createElement('p');
   recordingInfo.className = 'recording-info';
   recordingInfo.textContent = 'Saved as separate 15-minute clips. The selected limit applies to this recording session.';
@@ -187,25 +225,54 @@ function renderCamera(item) {
   clips.className = 'clip-list';
   saved.append(savedHeading, clips);
 
-  card.append(heading, video, source, latency, controls, recording, saved);
+  card.append(heading, video, source, latency, controls, ptz, recording, saved);
   grid.append(card);
-  const camera = { ...item, card, quality, state, video, source, latency, recordingState, recordingInfo, recording, limit, customLabel, customMinutes, record, stopRecord, savedHeading, clips, profiles: [], player: null, timer: null, generation: 0, recordingSession: null, sessionId: sessionStorage.getItem(`yoosee.recording-session:${item.id}`), lastSegmentCount: -1 };
+  const camera = { ...item, card, quality, streamToggle: cameraStreamToggle, state, video, source, latency, ptz, recordingState, recordingInfo, recording, limit, customLabel, customMinutes, record, savedHeading, clips, profiles: [], player: null, timer: null, generation: 0, recordingSession: null, sessionId: sessionStorage.getItem(`yoosee.recording-session:${item.id}`), lastSegmentCount: -1, ptzBusy: false };
   cameras.set(item.id, camera);
-
-  const cameraOption = document.createElement('option');
-  cameraOption.value = item.id;
-  cameraOption.textContent = item.name || item.id;
-  selectedCamera.append(cameraOption);
   quality.onchange = () => startCamera(camera, quality.value);
-  start.onclick = () => startCamera(camera, quality.value);
-  stop.onclick = () => stopCamera(camera);
+  streamToggle.onclick = () => camera.active ? stopCamera(camera) : startCamera(camera, quality.value || preferredProfile(camera, 'fhd'));
   limit.onchange = () => {
     sessionStorage.setItem(RECORD_LIMIT_KEY, limit.value);
     customLabel.hidden = limit.value !== 'custom';
   };
   customMinutes.onchange = () => sessionStorage.setItem(`${RECORD_LIMIT_KEY}:${item.id}`, customMinutes.value);
-  record.onclick = () => startRecording(camera);
-  stopRecord.onclick = () => stopRecording(camera);
+  record.onclick = () => camera.recordingSession ? stopRecording(camera) : startRecording(camera);
+  updateStreamToggle(camera);
+}
+
+function updateStreamToggle(camera) {
+  const busy = camera.streamBusy;
+  camera.streamToggle.textContent = busy ? (camera.active ? 'Stopping…' : 'Starting…') : camera.active ? 'Stop stream' : 'Start stream';
+  camera.streamToggle.className = camera.active ? 'button-danger' : 'button-primary';
+  camera.streamToggle.disabled = !camera.can_control || busy;
+  camera.streamToggle.setAttribute('aria-pressed', String(Boolean(camera.active)));
+  updateAllToggle();
+}
+
+function updateAllToggle() {
+  const button = document.querySelector('#toggle-all');
+  const controlled = [...cameras.values()].filter(camera => camera.can_control);
+  const activeCount = controlled.filter(camera => camera.active).length;
+  button.disabled = controlled.length === 0;
+  button.textContent = activeCount === 0 ? 'Start all' : activeCount === controlled.length ? 'Stop all' : 'Stop active';
+  button.className = activeCount === 0 ? 'button-primary' : 'button-danger';
+  button.disabled = controlled.length === 0 || controlled.some(camera => camera.streamBusy);
+}
+
+async function sendPtz(camera, pan, tilt, seconds, stop = false) {
+  if (camera.ptzBusy) return;
+  camera.ptzBusy = true;
+  show(stop ? `Stopping ${camera.name || camera.id} movement…` : `Moving ${camera.name || camera.id}…`);
+  for (const control of camera.ptz.querySelectorAll('button')) control.disabled = true;
+  try {
+    await api(cameraPath(camera.id, 'ptz'), stop ? {stop: true} : {pan, tilt, seconds});
+    show(stop ? `${camera.name || camera.id}: PTZ stopped.` : `${camera.name || camera.id}: PTZ movement complete.`);
+  } catch (error) {
+    show(`${camera.name || camera.id}: ${error.message}`);
+  } finally {
+    camera.ptzBusy = false;
+    for (const control of camera.ptz.querySelectorAll('button')) control.disabled = false;
+  }
 }
 
 function showSource(camera, source) {
@@ -214,31 +281,46 @@ function showSource(camera, source) {
 
 async function startCamera(camera, profile) {
   if (!profile) { camera.state.textContent = 'No stream profile available'; return false; }
+  if (camera.streamBusy) return false;
+  camera.streamBusy = true;
+  updateStreamToggle(camera);
   camera.state.textContent = 'Starting stream…';
   try {
     const result = await api(cameraPath(camera.id, 'start'), {profile});
     camera.quality.value = result.profile;
     camera.state.textContent = 'Stream active';
+    camera.active = true;
     attach(camera, result.playlist);
     showSource(camera, result.source);
     return true;
   } catch (error) {
     detach(camera);
+    camera.active = false;
     camera.state.textContent = error.message;
     return false;
+  } finally {
+    camera.streamBusy = false;
+    updateStreamToggle(camera);
   }
 }
 
 async function stopCamera(camera) {
+  if (camera.streamBusy) return false;
+  camera.streamBusy = true;
+  updateStreamToggle(camera);
   try {
     await api(cameraPath(camera.id, 'stop'), {});
     detach(camera);
     camera.state.textContent = 'Stream stopped';
+    camera.active = false;
     camera.source.textContent = 'Source: stopped';
     return true;
   } catch (error) {
     camera.state.textContent = error.message;
     return false;
+  } finally {
+    camera.streamBusy = false;
+    updateStreamToggle(camera);
   }
 }
 
@@ -259,9 +341,7 @@ function chosenLimit(camera) {
 function renderRecordingState(camera, session) {
   camera.recordingSession = session?.state === 'recording' ? session : null;
   const active = Boolean(camera.recordingSession);
-  camera.record.disabled = !camera.can_control || active;
-  camera.stopRecord.hidden = !active;
-  camera.stopRecord.disabled = !active;
+  updateRecordingToggle(camera);
   camera.limit.disabled = active;
   camera.customMinutes.disabled = active;
   if (active) {
@@ -276,6 +356,14 @@ function renderRecordingState(camera, session) {
     camera.recordingState.textContent = session?.state || 'Not recording';
     camera.recordingInfo.textContent = session?.stop_reason || session?.error || 'Saved clips remain available below.';
   }
+}
+
+function updateRecordingToggle(camera) {
+  const active = Boolean(camera.recordingSession);
+  camera.record.disabled = !camera.can_control || camera.recordBusy;
+  camera.record.textContent = camera.recordBusy ? (camera.recordAction === 'stop' ? 'Stopping…' : 'Starting…') : active ? 'Stop recording' : 'Start recording';
+  camera.record.className = active ? 'button-stop-record' : 'button-record';
+  camera.record.setAttribute('aria-pressed', String(active));
 }
 
 function formatTime(total) {
@@ -313,7 +401,10 @@ async function startRecording(camera) {
   if (!profile) { show(`${camera.name || camera.id}: no Full HD profile is available.`); return; }
   let maxSeconds;
   try { maxSeconds = chosenLimit(camera); } catch (error) { show(error.message); return; }
-  camera.record.disabled = true;
+  if (camera.recordBusy) return;
+  camera.recordBusy = true;
+  camera.recordAction = 'start';
+  updateRecordingToggle(camera);
   show(`${camera.name || camera.id}: starting FHD recording…`);
   try {
     const session = await api(cameraPath(camera.id, 'recording/start'), {profile, max_seconds: maxSeconds});
@@ -324,21 +415,29 @@ async function startRecording(camera) {
   } catch (error) {
     camera.record.disabled = false;
     show(`${camera.name || camera.id}: ${error.message}`);
+  } finally {
+    camera.recordBusy = false;
+    updateRecordingToggle(camera);
   }
 }
 
 async function stopRecording(camera) {
   const session = camera.recordingSession;
   if (!session) return;
-  camera.stopRecord.disabled = true;
+  if (camera.recordBusy) return;
+  camera.recordBusy = true;
+  camera.recordAction = 'stop';
+  updateRecordingToggle(camera);
   try {
     const result = await api(cameraPath(camera.id, 'recording/stop'), {session_id: session.id});
     renderRecordingState(camera, result);
     show(`${camera.name || camera.id}: stopping recording and finalizing the current clip…`);
     window.setTimeout(() => syncRecording(camera), 1000);
   } catch (error) {
-    camera.stopRecord.disabled = false;
     show(`${camera.name || camera.id}: ${error.message}`);
+  } finally {
+    camera.recordBusy = false;
+    updateRecordingToggle(camera);
   }
 }
 
@@ -397,12 +496,15 @@ async function loadCamera(item) {
     if (stream.active) {
       camera.quality.value = stream.profile;
       camera.state.textContent = 'Stream active';
+      camera.active = true;
       attach(camera, stream.playlist);
       showSource(camera, stream.source);
     } else {
+      camera.active = false;
       camera.state.textContent = item.error || 'Stream stopped';
       showSource(camera, stream.source);
     }
+    updateStreamToggle(camera);
     await loadClips(camera);
     await syncRecording(camera);
   } catch (error) {
@@ -411,12 +513,15 @@ async function loadCamera(item) {
   }
 }
 
-async function runForAll(action) {
+async function toggleAllStreams() {
   const controllable = [...cameras.values()].filter(camera => camera.can_control);
   if (!controllable.length) { show('You do not have camera control permission.'); return; }
-  show(action === 'start' ? 'Starting all streams…' : 'Stopping all streams…');
-  const results = await Promise.all(controllable.map(camera => action === 'start' ? startCamera(camera, camera.quality.value || preferredProfile(camera, 'fhd')) : stopCamera(camera)));
-  show(`${results.filter(Boolean).length} of ${results.length} streams ${action === 'start' ? 'started' : 'stopped'}. Check each camera card for errors.`);
+  const toStop = controllable.filter(camera => camera.active);
+  const action = toStop.length ? 'stop' : 'start';
+  const targets = toStop.length ? toStop : controllable;
+  show(action === 'start' ? 'Starting all streams…' : `Stopping ${targets.length === controllable.length ? 'all' : 'active'} streams…`);
+  const results = await Promise.all(targets.map(camera => action === 'start' ? startCamera(camera, camera.quality.value || preferredProfile(camera, 'fhd')) : stopCamera(camera)));
+  show(`${results.filter(Boolean).length} of ${targets.length} streams ${action === 'start' ? 'started' : 'stopped'}. Check each camera card for errors.`);
 }
 
 async function applyQualityToAll(mode) {
@@ -431,41 +536,11 @@ async function applyQualityToAll(mode) {
   show(`${results.filter(Boolean).length} of ${results.length} streams changed. Check each camera card for errors.`);
 }
 
-document.querySelector('#start-all').onclick = () => runForAll('start');
-document.querySelector('#stop-all').onclick = () => runForAll('stop');
+document.querySelector('#toggle-all').onclick = toggleAllStreams;
 document.querySelector('#all-fhd').onclick = () => applyQualityToAll('fhd');
 document.querySelector('#all-light').onclick = () => applyQualityToAll('light');
 autostart.checked = localStorage.getItem(AUTO_KEY) === 'true';
 autostart.onchange = () => localStorage.setItem(AUTO_KEY, String(autostart.checked));
-ptzDuration.value = localStorage.getItem('yoosee.ptz-duration') || '0.8';
-ptzDurationValue.textContent = `${Number(ptzDuration.value).toFixed(1)} s`;
-ptzDuration.oninput = () => {
-  ptzDurationValue.textContent = `${Number(ptzDuration.value).toFixed(1)} s`;
-  localStorage.setItem('yoosee.ptz-duration', ptzDuration.value);
-};
-document.querySelectorAll('[data-pan]').forEach(button => button.onclick = async () => {
-  if (ptzBusy) return;
-  ptzBusy = true;
-  const id = selectedCamera.value;
-  show(`Moving ${cameras.get(id)?.name || id}…`);
-  try {
-    await api(cameraPath(id, 'ptz'), {pan: Number(button.dataset.pan), tilt: Number(button.dataset.tilt), seconds: Number(ptzDuration.value)});
-    show('PTZ movement complete.');
-  } catch (error) { show(error.message); }
-  finally { ptzBusy = false; }
-});
-document.querySelector('#ptz-stop').onclick = async () => {
-  if (ptzBusy) return;
-  ptzBusy = true;
-  const id = selectedCamera.value;
-  try { await api(cameraPath(id, 'ptz'), {stop: true}); show('PTZ stop sent.'); }
-  catch (error) { show(error.message); }
-  finally { ptzBusy = false; }
-};
-selectedCamera.onchange = () => {
-  const camera = cameras.get(selectedCamera.value);
-  for (const control of document.querySelectorAll('[data-pan],#ptz-stop')) control.disabled = !camera?.can_control;
-};
 
 async function setupAdmin() {
   const panel = document.querySelector('#admin-panel');
@@ -569,10 +644,10 @@ document.querySelector('#add-network').onclick = async () => {
     const inventory = await api('/api/cameras');
     if (!inventory.length) { show('No cameras are configured.'); return; }
     const controllable = inventory.some(camera => camera.can_control);
-    for (const id of ['start-all', 'stop-all', 'all-fhd', 'all-light']) document.getElementById(id).disabled = !controllable;
+    for (const id of ['all-fhd', 'all-light']) document.getElementById(id).disabled = !controllable;
     document.querySelector('.autostart').hidden = !controllable;
     for (const item of inventory) renderCamera(item);
-    selectedCamera.dispatchEvent(new Event('change'));
+    updateAllToggle();
     await Promise.all(inventory.map(loadCamera));
     show(`${inventory.length} configured camera${inventory.length === 1 ? '' : 's'} loaded. FPS is measured from the live source.`);
     window.setInterval(() => { for (const camera of cameras.values()) syncRecording(camera); }, 2000);

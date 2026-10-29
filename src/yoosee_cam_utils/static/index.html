@@ -13,8 +13,7 @@
   <section class="toolbar" aria-label="Stream controls">
     <div class="toolbar-group">
       <span class="group-label">Streams</span>
-      <button id="start-all" class="button-primary">Start all</button>
-      <button id="stop-all" class="button-secondary">Stop all</button>
+      <button id="toggle-all" class="button-primary">Start all</button>
     </div>
     <div class="toolbar-group">
       <span class="group-label">Start all at</span>
@@ -25,21 +24,6 @@
   </section>
 
   <section id="camera-grid" class="camera-grid" aria-label="Configured cameras"></section>
-
-  <section class="ptz-panel" aria-labelledby="ptz-title">
-    <div class="ptz-heading"><div><p class="eyebrow">CAMERA MOVEMENT</p><h2 id="ptz-title">PTZ</h2></div>
-      <label>Selected camera <select id="selected-camera"></select></label>
-    </div>
-    <div class="ptz-body">
-      <div class="ptz-pad" aria-label="Pan and tilt">
-        <span></span><button data-pan="0" data-tilt="0.25" aria-label="Tilt up">↑</button><span></span>
-        <button data-pan="-0.25" data-tilt="0" aria-label="Pan left">←</button><button id="ptz-stop">Stop</button><button data-pan="0.25" data-tilt="0" aria-label="Pan right">→</button>
-        <span></span><button data-pan="0" data-tilt="-0.25" aria-label="Tilt down">↓</button><span></span>
-      </div>
-      <label class="movement-control" for="ptz-duration"><span>Movement per click</span><input id="ptz-duration" type="range" min="0.2" max="1" step="0.1" value="0.8"><output id="ptz-duration-value">0.8 s</output></label>
-      <p class="help-text">Pulse duration is not a calibrated angle. FPS and dimensions are measured from the active source; player delay is measured behind the HLS live edge.</p>
-    </div>
-  </section>
 
   <details id="admin-panel" class="admin-panel" hidden>
     <summary>Viewer access</summary>

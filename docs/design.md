@@ -41,11 +41,12 @@ camera workers. A compact grid can keep several live players visible. Detach hid
 players to bound browser decoding; server-side desired state is independent of which
 panel is selected. Polling thumbnails must not create extra camera RTSP sessions.
 
-The selected camera gets Start/retry, Stop, quality and bounded PTZ controls. A split
-Start button offers Start all and Stop all. A separate bulk-quality action applies
-only to authorized cameras, resolves each camera's supported profile and reports
-per-camera results. Never silently substitute a different resolution. Serialize
-bulk startup with configurable bounded concurrency to avoid reconnect storms.
+Each camera card has one stateful Start/Stop toggle, a quality selector, compact PTZ
+controls and its own movement-duration slider. One global toggle starts all stopped
+cameras or stops active cameras. A separate bulk-quality action applies only to
+authorized cameras, resolves each camera's supported profile and reports per-camera
+results. Never silently substitute a different resolution. Serialize bulk startup with
+configurable bounded concurrency to avoid reconnect storms.
 
 Start/stop and quality affect the camera worker shared by authorized viewers, as in
 the prototype. Show that scope in the UI. Start/stop live viewing must not stop a
