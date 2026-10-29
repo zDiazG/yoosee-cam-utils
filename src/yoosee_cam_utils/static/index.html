@@ -2,7 +2,7 @@
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Local camera</title><link rel="stylesheet" href="/style.css">
 <main><h1>Local camera</h1><p>Local video with playback delay. No cloud uploads.</p>
-<section><label>Quality <select id="profiles"></select></label><button id="start">Open video</button><button id="stop">Stop video</button></section>
+<section><label>Quality <select id="profiles"></select></label><button id="start">Start or retry video</button><button id="stop">Stop video</button></section>
 <video id="video" controls autoplay muted playsinline></video>
 <section class="ptz"><button data-pan="0" data-tilt="0.25">↑</button><div><button data-pan="-0.25" data-tilt="0">←</button><button id="ptz-stop">Stop PTZ</button><button data-pan="0.25" data-tilt="0">→</button></div><button data-pan="0" data-tilt="-0.25">↓</button></section>
 <p>Each click requests a short movement. Use the video controls for audio and fullscreen. PTZ compatibility remains under investigation.</p><output id="status" aria-live="polite">Loading profiles...</output>

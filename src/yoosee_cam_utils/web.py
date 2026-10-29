@@ -28,7 +28,11 @@ class Streams:
         self.camera = camera
         self.directory = Path(directory).expanduser()
         self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.lock = threading.RLock()
+        # Media reads must not wait behind camera SOAP calls. The camera can take
+        # several seconds to answer PTZ requests, while the browser polls HLS often.
+        self.state_lock = threading.RLock()
+        self.camera_lock = threading.Lock()
+        self.lifecycle_lock = threading.Lock()
         self.process = None
         self.stream_dir = None
         self.profile = None
@@ -36,74 +40,91 @@ class Streams:
         self.log = None
 
     def profiles(self):
-        with self.lock:
+        with self.camera_lock:
             return self.camera.profiles()
 
-    def stop(self):
-        with self.lock:
-            if self.process:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.process.kill(); self.process.wait()
+    def _stop_worker(self):
+        with self.state_lock:
+            process, log, stream_dir = self.process, self.log, self.stream_dir
             self.process = None
-            if self.log:
-                self.log.close(); self.log = None
-            if self.stream_dir and self.stream_dir.parent == self.directory:
-                shutil.rmtree(self.stream_dir)
+            self.log = None
             self.stream_dir = None
             self.profile = None
+        if process:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill(); process.wait()
+        if log:
+            log.close()
+        if stream_dir and stream_dir.parent == self.directory:
+            shutil.rmtree(stream_dir)
+
+    def stop(self):
+        with self.lifecycle_lock:
+            self._stop_worker()
 
     def start(self, profile):
         if not isinstance(profile, str) or not re.fullmatch(r"[\w.-]{1,100}", profile):
             raise ValueError("invalid profile")
-        with self.lock:
-            if self.process and self.process.poll() is None and self.profile == profile:
-                self.last_access = time.monotonic()
-                return self.status()
-            profiles = self.camera.profiles()
-            if profile not in [p["token"] for p in profiles]:
-                raise ValueError("unknown profile")
-            previous_worker = self.process is not None
-            self.stop()
+        with self.lifecycle_lock:
+            with self.state_lock:
+                if self.process and self.process.poll() is None and self.profile == profile:
+                    self.last_access = time.monotonic()
+                    return self.status()
+            with self.camera_lock:
+                profiles = self.camera.profiles()
+                if profile not in [p["token"] for p in profiles]:
+                    raise ValueError("unknown profile")
+                uri = self.camera.uri(profile)
+            with self.state_lock:
+                previous_worker = self.process is not None
+            self._stop_worker()
             if previous_worker:
                 # Allow firmware to release the previous RTSP session before switching.
                 time.sleep(1)
-            uri = self.camera.uri(profile)
-            self.stream_dir = self.directory / uuid.uuid4().hex
-            self.stream_dir.mkdir(mode=0o700)
-            self.log = (self.stream_dir / "worker.log").open("wb")
-            args = ["ffmpeg", "-nostdin", "-v", "error", "-fflags", "+genpts", "-protocol_whitelist", "pipe,file,rtsp,tcp,udp,rtp", "-f", "concat", "-safe", "0", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-hls_time", "2", "-hls_list_size", "6", "-hls_delete_threshold", "2", "-hls_flags", "delete_segments+independent_segments+omit_endlist", "-hls_segment_filename", str(self.stream_dir / "seg%09d.ts"), "-f", "hls", str(self.stream_dir / "index.m3u8")]
-            self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self.log)
+            stream_dir = self.directory / uuid.uuid4().hex
+            stream_dir.mkdir(mode=0o700)
+            log = (stream_dir / "worker.log").open("wb")
+            args = ["ffmpeg", "-nostdin", "-v", "error", "-fflags", "+genpts", "-protocol_whitelist", "pipe,file,rtsp,tcp,udp,rtp", "-f", "concat", "-safe", "0", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-hls_time", "2", "-hls_list_size", "6", "-hls_delete_threshold", "2", "-hls_flags", "delete_segments+independent_segments+omit_endlist", "-hls_segment_filename", str(stream_dir / "seg%09d.ts"), "-f", "hls", str(stream_dir / "index.m3u8")]
             try:
-                self.process.stdin.write(media_input(uri, self.camera.c))
-                self.process.stdin.close()
+                process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log)
+            except BaseException:
+                log.close()
+                shutil.rmtree(stream_dir)
+                raise
+            with self.state_lock:
+                self.stream_dir, self.log, self.process = stream_dir, log, process
                 self.profile = profile
                 self.last_access = time.monotonic()
+            try:
+                process.stdin.write(media_input(uri, self.camera.c))
+                process.stdin.close()
                 deadline = time.monotonic() + 15
                 while time.monotonic() < deadline:
-                    if (self.stream_dir / "index.m3u8").exists():
+                    if (stream_dir / "index.m3u8").exists():
                         return self.status()
-                    if self.process.poll() is not None:
+                    if process.poll() is not None:
                         break
                     time.sleep(0.2)
                 raise ValueError("video worker did not produce a playlist")
             except BaseException:
                 if self.log:
                     self.log.flush()
-                    detail = (self.stream_dir / "worker.log").read_text(errors="replace")[-2000:]
+                    detail = (stream_dir / "worker.log").read_text(errors="replace")[-2000:]
                     print("HLS startup failed: " + redact(detail, self.camera.c), file=sys.stderr, flush=True)
-                self.stop()
+                self._stop_worker()
                 raise
 
     def status(self):
-        with self.lock:
+        with self.state_lock:
             active = bool(self.process and self.process.poll() is None)
             return {"active": active, "profile": self.profile, "playlist": f"/media/{self.stream_dir.name}/index.m3u8" if active else None}
 
     def media(self, stream_id, filename):
-        with self.lock:
+        with self.state_lock:
             if not self.stream_dir or stream_id != self.stream_dir.name or not re.fullmatch(r"index\.m3u8|seg[0-9]{9}\.ts", filename):
                 raise FileNotFoundError()
             data = (self.stream_dir / filename).read_bytes()
@@ -111,8 +132,10 @@ class Streams:
             return data
 
     def ptz(self, pan=0.0, tilt=0.0, duration=0.2, stop=False):
-        with self.lock:
-            token = self.profile or self.camera.token(None)
+        with self.state_lock:
+            token = self.profile
+        with self.camera_lock:
+            token = token or self.camera.token(None)
             if stop:
                 self.camera.stop(token)
             else:
@@ -263,9 +286,11 @@ def main():
     def reap():
         while True:
             time.sleep(10)
-            with server.streams.lock:
-                if server.streams.process and time.monotonic() - server.streams.last_access > 120:
-                    server.streams.stop()
+            with server.streams.lifecycle_lock:
+                with server.streams.state_lock:
+                    idle = server.streams.process and time.monotonic() - server.streams.last_access > 120
+                if idle:
+                    server.streams._stop_worker()
     threading.Thread(target=reap, daemon=True).start()
     try:
         server.serve_forever()

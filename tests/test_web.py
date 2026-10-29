@@ -6,9 +6,11 @@ import ssl
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from unittest.mock import Mock
 
 from yoosee_cam_utils.web import make_server, Streams
@@ -115,6 +117,81 @@ class WebTests(unittest.TestCase):
         for filename in ("../worker.log", "worker.log", "../../config"):
             with self.assertRaises(FileNotFoundError):
                 streams.media("sample", filename)
+
+    def test_media_reads_continue_while_ptz_camera_call_waits(self):
+        camera = Mock()
+        streams = Streams(camera, self.root / "ptz-cache")
+        streams.profile = "profile0"
+        streams.stream_dir = streams.directory / "active"
+        streams.stream_dir.mkdir()
+        (streams.stream_dir / "seg000000001.ts").write_bytes(b"sample segment")
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_stop(_token):
+            entered.set()
+            release.wait(3)
+
+        camera.stop.side_effect = blocked_stop
+        worker = threading.Thread(target=lambda: streams.ptz(stop=True), daemon=True)
+        worker.start()
+        self.assertTrue(entered.wait(1))
+        started = time.monotonic()
+        payload = streams.media("active", "seg000000001.ts")
+        elapsed = time.monotonic() - started
+        release.set()
+        worker.join(1)
+        self.assertEqual(payload, b"sample segment")
+        self.assertLess(elapsed, 0.25)
+        self.assertFalse(worker.is_alive())
+
+    def test_media_reads_continue_while_profile_lookup_waits(self):
+        camera = Mock(c={"username": "admin", "password": "test-only-password"})
+        streams = Streams(camera, self.root / "startup-cache")
+        streams.stream_dir = streams.directory / "previous"
+        streams.stream_dir.mkdir()
+        (streams.stream_dir / "index.m3u8").write_text("#EXTM3U\n")
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_profiles():
+            entered.set()
+            release.wait(3)
+            return [{"token": "other"}]
+
+        camera.profiles.side_effect = blocked_profiles
+        result = []
+
+        def start_invalid_profile():
+            try:
+                streams.start("profile0")
+            except ValueError as exc:
+                result.append(str(exc))
+
+        worker = threading.Thread(target=start_invalid_profile, daemon=True)
+        worker.start()
+        self.assertTrue(entered.wait(1))
+        started = time.monotonic()
+        payload = streams.media("previous", "index.m3u8")
+        elapsed = time.monotonic() - started
+        release.set()
+        worker.join(1)
+        self.assertEqual(payload, b"#EXTM3U\n")
+        self.assertLess(elapsed, 0.25)
+        self.assertEqual(result, ["unknown profile"])
+        self.assertFalse(worker.is_alive())
+
+    def test_ptz_request_is_well_formed_and_always_stops(self):
+        camera = Mock()
+        streams = Streams(camera, self.root / "ptz-xml-cache")
+        streams.profile = "profile0"
+
+        streams.ptz(pan=0.25, duration=0.2)
+
+        operation, namespace, action, body = camera.call.call_args.args
+        self.assertEqual((operation, action), ("ptz", "ContinuousMove"))
+        ET.fromstring(f'<root xmlns:m="{namespace}">{body}</root>')
+        camera.stop.assert_called_once_with("profile0")
 
 
 if __name__ == "__main__":

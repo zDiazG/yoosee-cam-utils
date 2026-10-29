@@ -78,17 +78,20 @@ event coverage has been validated. Time-based retention is the initial baseline.
 
 ## Protocol investigation decisions
 
-Compare existing public protocol work and the known-working official client before
-building a vendor SDK. Check licenses before copying or adapting source. Public
-repositories without a declared license can inform interoperability research; they
-are not treated as permission to redistribute their code.
+This is a private homelab tool, not a plan to publish a Yoosee replacement. Inspect
+public protocol notes and code as useful references, and adapt what is useful for
+this private setup. Compatibility still has to be demonstrated against this camera;
+another GWIPC model can speak a different protocol.
 
-Prefer bounded local protocol tests. If app analysis is needed, start with the
-Android version known to control the device successfully. Record provenance, version,
-signing identity and hashes; inspect statically before execution. Isolate dynamic
-tests and retain sanitized evidence privately. Desktop-client analysis is a fallback
-when it provides a clearer working local protocol. Firmware changes, remote shells
-and broad device exploitation are outside this work.
+Prefer bounded local protocol tests. A public GWIPC component sends a vendor TCP
+RTSP SET_PARAMETER PTZ request; a separate Yoosee integration uses ONVIF SOAP with
+WS-Addressing and the same profile token as this camera. These are concrete leads,
+not yet verified against this unit. If they do not explain the working control path,
+use the official Android APK listed at https://download.yoosee.com/ without needing
+the package installed on the user's phone. Record version and hash, inspect it first,
+then use isolated dynamic testing only as needed. The vendor download page also lists
+a Windows CMS client. Firmware changes, remote shells and account bypass are outside
+this work.
 
 ## Acceptance sequence
 
