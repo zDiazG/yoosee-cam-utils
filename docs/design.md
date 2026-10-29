@@ -54,20 +54,10 @@ step 0.1, default 0.8, with a Stop in the failure path.
 
 ## Persistent startup preferences
 
-Store desired live state and per-camera preferred quality atomically in a private
-SQLite state file outside Git. Separate immutable/configured camera inventory from
-mutable application state. The CLI and admin UI expose the same settings, including
-an explicit autostart option. Record a desired quality such as FHD separately from
-the device-specific profile token.
-
-Autostart defaults off. When enabled, service startup starts available authorized
-cameras at their saved quality, with bounded retries/backoff and visible failures.
-A late camera can reconnect without restarting healthy cameras. Stop all persists
-stopped desired state so a reload cannot undo the operator action. An explicit
-Start all resumes it. Configuration may separately declare startup defaults.
-The current 120-second idle reaper must stop only on-demand workers; it must not
-silently cancel explicitly persistent live workers or recording. Expose resource
-usage and allow autostart to be disabled without deleting camera configuration.
+The browser currently saves its Full HD autostart choice in local storage. The choice
+is local to that browser and does not change camera config. Server-wide desired state,
+startup retries and per-camera saved quality remain future work. Autostart defaults
+off. The 120-second reaper applies only to viewer workers and must not stop recording.
 
 ## Users, access rules and tunnel boundaries
 
@@ -132,9 +122,11 @@ changes or an HD/FHD 30/60 option before device evidence exists.
 
 ## Recording, cache and delivery
 
-Recording is independent of viewers, selected quality and application login sessions.
-One owner per camera records the lightweight source continuously without transcoding.
-First prove simultaneous real main/substream sessions and device session limits.
+Continuous recording must be independent of viewers, selected quality and login
+sessions. The current slice only captures user-requested FHD clips. It opens a separate
+RTSP session and copies video/audio into a Matroska file without transcoding. Before
+adding a continuous lightweight stream, prove simultaneous main/substream sessions
+and the camera's session limits.
 A gateway relay or shared ingest is justified only when measured session limits or
 routing require it. The actual lightweight profile is 640×360 on the current camera;
 do not relabel it HD merely because the vendor app does.
@@ -147,15 +139,16 @@ Schedules survive restart and define timezone/missed-run behavior. External dete
 adapters are planned; object detection itself is not part of the first recording slice.
 A later local motion adapter needs explicit CPU and false-positive acceptance.
 
-Use RAM for disposable previews and a private SSD spool for pending durable clips.
-Initial configurable safeguards are a 2 GiB total spool and a 5 GiB filesystem free-
-space reserve, with recording disabled by default. Refuse an incompatible budget.
-Manual clips default to 30 seconds and are capped at 300 seconds. Continuous footage
-uses bounded segments, initially 60 seconds, and a disposable oldest-first ring.
-Protect finalized manual/event clips until delivery. Reserve event capacity within
-the total budget. At capacity, expire disposable continuous segments first, then
-pause/reject recording explicitly rather than filling disk or silently losing events.
-A destination outage necessarily limits how much footage can be retained locally.
+Manual clip capture writes to a private spool, verifies the resulting stream with
+ffprobe, computes SHA-256, and stores clip metadata beside the file. The configurable
+spool defaults to 2 GiB with a 5 GiB filesystem free-space reserve; sample config
+defaults recording off. Startup removes incomplete temporary output and orphaned media.
+Manual clips default to 30 seconds and are capped at 300
+seconds. The service allows one clip capture at a time and rejects a request when the
+quota or free-space reserve is reached. Camera administrators can delete saved clips;
+the service has no automatic retention policy. The UI provides authenticated downloads.
+Continuous recording, its bounded
+60-second segments, and oldest-first disposable ring remain future work.
 
 Finalize files before enqueueing. SQLite journals queue transitions and recovery.
 A local disposable destination can exercise delivery while real storage is unavailable.
@@ -184,9 +177,11 @@ removes disposable test media after evidence is collected.
 4. Startup and frontend: the browser can save local Full HD autostart. Acceptance still
    needs restart behavior, partial bulk failures and live-lag observation with multiple
    players.
-5. Local recording: manual clip, lightweight ring and scheduled/external triggers stay
-   within quota through restart and a simulated destination outage. Verify checksums,
-   idempotency and removal of disposable test media.
+5. Local recording: manual FHD clips can be started, downloaded and deleted from a
+   camera tile, stay within configured spool/free-space limits and expose verified
+   metadata. Automated tests cover permissions and quota behavior; a real three-second
+   capture was validated and removed. Continuous ring, schedule/event triggers and
+   restart recovery remain future acceptance items.
 6. Real storage delivery: verify identity, permissions, interruption/resume, promotion
    and acknowledgement with the storage owner after that destination is ready.
 

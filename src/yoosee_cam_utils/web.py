@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 import uuid
 
 from .cli import Camera, load_config, media_input, redact, PTZ, SCHEMA
+from .recording import ClipManager
 from xml.sax.saxutils import escape
 
 
@@ -501,7 +502,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def respond(self, code, body=b"", content_type="application/json", challenge=False):
+    def respond(self, code, body=b"", content_type="application/json", challenge=False, extra_headers=()):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -510,8 +511,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; media-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'")
         if challenge:
             self.send_header("WWW-Authenticate", 'Basic realm="Camera viewer", charset="UTF-8"')
+        for name, value in extra_headers:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
+
+    def respond_clip(self, path, clip_id):
+        size = path.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Disposition", f'attachment; filename="{clip_id}.mkv"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        self.end_headers()
+        with path.open("rb") as stream:
+            shutil.copyfileobj(stream, self.wfile, length=1024 * 1024)
 
     def authorized(self):
         ip = ipaddress.ip_address(self.client_address[0])
@@ -561,7 +577,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/vendor/hls.min.js":
                 self.respond(200, self.server.hls_js.read_bytes(), "text/javascript")
             elif path == "/api/cameras":
-                visible = [item for item in self.server.cameras.summary() if self.server.users.can(self.auth_user, item["id"], "view")]
+                visible = [item | {"can_control": self.server.users.can(self.auth_user, item["id"], "control")} for item in self.server.cameras.summary() if self.server.users.can(self.auth_user, item["id"], "view")]
                 self.respond(200, json.dumps(visible).encode())
             elif path == "/api/admin/users":
                 if self.require_web_admin():
@@ -573,6 +589,18 @@ class Handler(BaseHTTPRequestHandler):
                 _, _, _, camera_id, operation = path.split("/")
                 if not self.can_camera(camera_id, "view"): return
                 self.respond(200, json.dumps(self.server.cameras.invoke(camera_id, operation)).encode())
+            elif re.fullmatch(r"/api/cameras/[^/]+/clips(?:/[a-f0-9]{32})?", path):
+                parts = path.split("/")
+                camera_id = parts[3]
+                if not self.can_camera(camera_id, "view"): return
+                if len(parts) == 5:
+                    self.respond(200, json.dumps(self.server.clips.list_clips(camera_id)).encode())
+                else:
+                    self.respond(200, json.dumps(self.server.clips.status(parts[5], camera_id)).encode())
+            elif re.fullmatch(r"/recordings/[^/]+/[a-f0-9]{32}", path):
+                _, _, camera_id, clip_id = path.split("/")
+                if not self.can_camera(camera_id, "view"): return
+                self.respond_clip(self.server.clips.clip_path(camera_id, clip_id), clip_id)
             elif path == "/api/profiles":
                 if not self.can_camera(self.server.cameras.default_camera, "view"): return
                 self.respond(200, json.dumps(self.server.cameras.invoke(self.server.cameras.default_camera, "profiles")).encode())
@@ -623,6 +651,24 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.cameras.invoke(camera_id, "stop"); result = {"active": False}
                 else:
                     result = self.server.cameras.invoke(camera_id, "ptz", float(data.get("pan", 0)), float(data.get("tilt", 0)), float(data.get("seconds", 0.2)), bool(data.get("stop", False)))
+            elif re.fullmatch(r"/api/cameras/[^/]+/clips(?:/[a-f0-9]{32}/delete)?", path):
+                parts = path.split("/")
+                camera_id = parts[3]
+                try:
+                    self.server.cameras.get(camera_id)
+                except KeyError:
+                    self.respond(404); return
+                if not self.can_camera(camera_id, "record"): return
+                try:
+                    if len(parts) == 7 and parts[6] == "delete":
+                        self.server.clips.delete_clip(camera_id, parts[5])
+                        self.respond(200, b'{"deleted":true}'); return
+                    result = self.server.clips.start(camera_id, data.get("profile"), data.get("seconds"))
+                except (ValueError, OSError) as error:
+                    self.respond(409, json.dumps({"error": str(error)}).encode()); return
+                except KeyError:
+                    self.respond(404); return
+                self.respond(202, json.dumps(result).encode()); return
             elif path == "/api/admin/users":
                 if not self.require_web_admin(): return
                 self.server.users.create_user(
@@ -669,7 +715,7 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(400, b'{"error":"Request failed; check camera availability and parameters"}')
 
 
-def make_server(camera, web, streams=None, default_camera="cam01"):
+def make_server(camera, web, streams=None, default_camera="cam01", recording=None):
     asset = Path(web["hls_js"]).expanduser()
     if hashlib.sha256(asset.read_bytes()).hexdigest() != web["hls_js_sha256"]:
         raise ValueError("HLS asset digest mismatch")
@@ -685,6 +731,7 @@ def make_server(camera, web, streams=None, default_camera="cam01"):
     server.tls_context = context
     server.cameras = registry
     server.streams = server.cameras.get(default_camera)
+    server.clips = ClipManager(server.cameras, recording or {})
     auth_camera = cameras[default_camera]
     server.users = UserStore(
         web.get("auth_database", "~/.local/state/yoosee-cam-utils/viewer-users.sqlite3"),
@@ -710,8 +757,9 @@ def main():
     cameras = {name: Camera(load_config(a.config, name)) for name in camera_ids}
     web = config["web"]
     if a.dry_run:
-        print(json.dumps({"bind": web["bind"], "port": web["port"], "tls": True, "auth": "server-side basic", "allowed_networks": web["allowed_networks"], "cameras": camera_ids, "default_camera": default_camera})); return
-    server = make_server(cameras, web, default_camera=default_camera)
+        recording = config.get("recording", {})
+        print(json.dumps({"bind": web["bind"], "port": web["port"], "tls": True, "auth": "server-side basic", "allowed_networks": web["allowed_networks"], "cameras": camera_ids, "default_camera": default_camera, "manual_recording": {"enabled": bool(recording.get("enabled", False)), "max_bytes": int(recording.get("max_bytes", 2 * 1024**3)), "reserve_bytes": int(recording.get("reserve_bytes", 5 * 1024**3))}})); return
+    server = make_server(cameras, web, default_camera=default_camera, recording=config.get("recording", {}))
     def reap():
         while True:
             time.sleep(10)
@@ -721,9 +769,12 @@ def main():
         server.serve_forever()
     finally:
         try:
-            server.cameras.stop_all()
+            server.clips.stop_all()
         finally:
-            server.server_close()
+            try:
+                server.cameras.stop_all()
+            finally:
+                server.server_close()
 
 
 if __name__ == "__main__":
