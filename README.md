@@ -44,9 +44,10 @@ are ignored by Git. No cloud upload, firmware change or continuous recorder is i
 
 An optional [HTTPS viewer](docs/web-viewer.md) provides server authentication,
 video/audio, profile selection and short PTZ movements with an adjustable pulse
-duration. Its HLS worker preserves
-the source video and converts audio to AAC for browsers. It stops after two minutes
-without media requests. All viewers share the selected profile.
+duration. Live playback uses fragmented MP4 over authenticated HTTPS and the browser's
+MediaSource API, with HLS as a compatibility fallback. One camera connection preserves
+the source video and converts audio to AAC. It stops after two minutes without media
+requests. All viewers share the selected profile.
 
 The viewer now has independent configured camera workers, per-camera controls, bulk
 start/stop and quality actions, a saved browser preference to start Full HD streams,
@@ -60,10 +61,11 @@ custom cap of up to 12 hours. A bounded private spool stops recording when its q
 free-space reserve is reached. Continuous recording, automatic retention/delivery,
 and a real second-camera test remain outstanding. Camera admins can delete saved clips.
 
-Both profiles currently emit 15 fps. A reversible ONVIF write and reconnect test
-failed to change the FHD stream to 30 fps. The camera reported its configured limit
-as 30 fps throughout; the saved encoder configuration was restored. No 60 fps support
-was found. The page measures and displays actual FPS from a current stream segment.
+Earlier checks reported 15 fps on both profiles. A later timestamp count measured
+10.0 fps on FHD and 10.1 fps on the lightweight profile despite the stream reporting
+15 fps. A reversible ONVIF write and reconnect test failed to produce 30 fps. The saved
+encoder configuration was restored. No 60 fps support was found. MediaSource playback
+shows browser frame throughput separately from the source-reported rate.
 See [the viewer notes](docs/web-viewer.md) and [design](docs/design.md) for evidence
 and remaining acceptance work.
 

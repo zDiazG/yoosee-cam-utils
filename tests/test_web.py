@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import ipaddress
 import json
 from pathlib import Path
 import ssl
@@ -348,8 +349,24 @@ class WebTests(unittest.TestCase):
         error.exception.close()
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.request("/api/admin/networks/remove",authorized=True,data={"cidr":"127.0.0.0/8"},extra={"X-Camera-Client":"1"})
-        self.assertEqual(error.exception.code,400)
+        self.assertEqual(error.exception.code,409)
+        self.assertIn("administrator source",json.load(error.exception)["error"])
         error.exception.close()
+
+    def test_live_connection_rechecks_account_and_source_revocation(self):
+        users = self.server.users
+        users.create_user("liveviewer", "long-test-password", roles=["viewer"],
+                          camera_permissions={"01": "viewer"}, networks="127.0.0.1, 127.0.0.2",
+                          camera_ids=["cam01"])
+        address = ipaddress.ip_address("127.0.0.1")
+        self.assertTrue(users.can_continue_viewing("liveviewer", address, "cam01"))
+        self.assertFalse(users.can_continue_viewing("liveviewer", address, "cam02"))
+        users.set_enabled("liveviewer", False)
+        self.assertFalse(users.can_continue_viewing("liveviewer", address, "cam01"))
+        users.set_enabled("liveviewer", True)
+        with users._session() as db:
+            db.execute("DELETE FROM allowed_networks")
+        self.assertFalse(users.can_continue_viewing("liveviewer", address, "cam01"))
 
     def test_user_database_has_restrictive_permissions(self):
         self.assertEqual(self.server.users.path.stat().st_mode & 0o777,0o600)

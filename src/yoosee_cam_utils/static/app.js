@@ -76,6 +76,10 @@ function labelProfile(profile) {
   return `${width || '?'}x${height || '?'} - ${type}`;
 }
 function detach(camera) {
+  camera.generation++;
+  camera.liveController?.abort();
+  camera.liveController = null;
+  clearTimeout(camera.sourceTimer);
   if (camera.timer) clearInterval(camera.timer);
   camera.timer = null;
   if (camera.player) camera.player.destroy();
@@ -83,13 +87,117 @@ function detach(camera) {
   camera.video.pause();
   camera.video.removeAttribute('src');
   camera.video.load();
+  if (camera.objectURL) URL.revokeObjectURL(camera.objectURL);
+  camera.objectURL = null;
+  camera.liveFPS = null;
+  camera.video.playbackRate = 1;
   camera.latency.textContent = 'Player delay: measuring…';
 }
-function attach(camera, playlist) {
+function sourceUpdate(buffer, action, signal) {
+  return new Promise((resolve, reject) => {
+    const finish = error => {
+      clearTimeout(timeout);
+      buffer.removeEventListener('updateend', done);
+      buffer.removeEventListener('error', failed);
+      signal.removeEventListener('abort', cancelled);
+      error ? reject(error) : resolve();
+    };
+    const done = () => finish();
+    const failed = () => finish(Error('The browser could not decode live video.'));
+    const cancelled = () => finish(new DOMException('Playback cancelled', 'AbortError'));
+    const timeout = setTimeout(() => finish(Error('Live video buffer timed out.')), 5000);
+    buffer.addEventListener('updateend', done, {once: true});
+    buffer.addEventListener('error', failed, {once: true});
+    signal.addEventListener('abort', cancelled, {once: true});
+    try {
+      if (signal.aborted) cancelled();
+      else action();
+    } catch (error) { finish(error); }
+  });
+}
+
+async function attachLive(camera, stream, generation) {
+  const controller = new AbortController();
+  camera.liveController = controller;
+  const source = new MediaSource();
+  camera.objectURL = URL.createObjectURL(source);
+  const opened = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { cleanup(); reject(Error('Live player did not open.')); }, 8000);
+    const cleanup = () => { clearTimeout(timeout); source.removeEventListener('sourceopen', ready); controller.signal.removeEventListener('abort', cancelled); };
+    const ready = () => { cleanup(); resolve(); };
+    const cancelled = () => { cleanup(); reject(new DOMException('Playback cancelled', 'AbortError')); };
+    source.addEventListener('sourceopen', ready, {once: true});
+    controller.signal.addEventListener('abort', cancelled, {once: true});
+  });
+  camera.video.src = camera.objectURL;
+  await opened;
+  source.duration = Infinity;
+  const buffer = source.addSourceBuffer(stream.mime);
+  const response = await fetch(stream.live, {signal: controller.signal});
+  if (!response.ok || !response.body) throw Error(`Live video request failed (${response.status}).`);
+  const reader = response.body.getReader();
+  let started = false;
+  let sampleAt = performance.now();
+  let framesAt = camera.video.getVideoPlaybackQuality?.().totalVideoFrames || 0;
+  const followLive = () => {
+    if (!buffer.buffered.length || generation !== camera.generation) return;
+    const end = buffer.buffered.end(buffer.buffered.length - 1);
+    const delay = Math.max(0, end - camera.video.currentTime);
+    if (!started || (!camera.video.paused && delay > 1.2)) {
+      camera.video.currentTime = Math.max(buffer.buffered.start(0), end - 0.3);
+      started = true;
+    }
+    camera.video.playbackRate = !camera.video.paused && delay > 0.7 && delay < 1.2 ? 1.05 : 1;
+    camera.latency.textContent = camera.video.paused ? 'Live paused' : `Live · ${Math.max(0, end - camera.video.currentTime).toFixed(1)} s buffered`;
+    const now = performance.now();
+    if (now - sampleAt >= 2000 && camera.video.getVideoPlaybackQuality) {
+      const frames = camera.video.getVideoPlaybackQuality().totalVideoFrames;
+      if (!camera.video.paused && frames > framesAt) {
+        camera.liveFPS = (frames - framesAt) * 1000 / (now - sampleAt);
+        showSource(camera, camera.sourceMetadata);
+      }
+      framesAt = frames;
+      sampleAt = now;
+    }
+  };
+  camera.timer = setInterval(followLive, 250);
+  camera.video.play().catch(() => {});
+  try {
+    while (generation === camera.generation) {
+      const {done, value} = await reader.read();
+      if (done) throw Error('Live video disconnected. Start the stream to retry.');
+      await sourceUpdate(buffer, () => buffer.appendBuffer(value), controller.signal);
+      followLive();
+      if (buffer.buffered.length) {
+        const end = buffer.buffered.end(buffer.buffered.length - 1);
+        source.setLiveSeekableRange?.(Math.max(0, end - 6), end);
+        if (buffer.buffered.start(0) < end - 10 && camera.video.currentTime > end - 5) {
+          await sourceUpdate(buffer, () => buffer.remove(0, end - 6), controller.signal);
+        }
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
+function attach(camera, stream) {
   detach(camera);
   const generation = ++camera.generation;
+  if (!stream.source) refreshSource(camera, generation);
+  if (stream.live && window.MediaSource && MediaSource.isTypeSupported(stream.mime)) {
+    camera.latency.textContent = 'Live · connecting…';
+    attachLive(camera, stream, generation).catch(error => {
+      if (generation !== camera.generation || error.name === 'AbortError') return;
+      detach(camera);
+      camera.state.textContent = error.message;
+      showError(`${camera.name || camera.id}: ${error.message}`);
+    });
+    return;
+  }
+  const playlist = stream.playlist;
   if (Hls.isSupported()) {
-    camera.player = new Hls({enableWorker: false, liveSyncDurationCount: 1, liveMaxLatencyDurationCount: 3, maxLiveSyncPlaybackRate: 1.1, maxBufferLength: 15});
+    camera.player = new Hls({enableWorker: false, liveSyncDurationCount: 1, liveMaxLatencyDurationCount: 2, liveSyncOnStallIncrease: 0, maxLiveSyncPlaybackRate: 1.1, maxBufferLength: 4, maxMaxBufferLength: 8, backBufferLength: 4});
     camera.player.loadSource(playlist);
     camera.player.attachMedia(camera.video);
     camera.timer = setInterval(() => {
@@ -317,7 +425,22 @@ async function sendPtz(camera, pan, tilt, seconds, stop = false) {
 }
 
 function showSource(camera, source) {
-  camera.source.textContent = source && source.fps ? `Source: ${source.width} × ${source.height} at ${source.fps} fps` : 'Source FPS is not available yet';
+  camera.sourceMetadata = source;
+  const reported = source?.fps ? `${source.fps} fps reported` : 'source FPS unavailable';
+  camera.source.textContent = camera.liveFPS && camera.video.videoWidth ? `Playback: ${camera.video.videoWidth}x${camera.video.videoHeight} · ${camera.liveFPS.toFixed(1)} fps · ${reported}` : source?.fps ? `Source: ${source.width}x${source.height} · ${reported}` : 'Source FPS is not available yet';
+}
+
+function refreshSource(camera, generation, attempt = 0) {
+  camera.sourceTimer = setTimeout(async () => {
+    try {
+      const stream = await api(cameraPath(camera.id, 'status'));
+      if (generation !== camera.generation) return;
+      if (stream.source) showSource(camera, stream.source);
+      else if (attempt < 3) refreshSource(camera, generation, attempt + 1);
+    } catch (_) {
+      if (generation === camera.generation) camera.source.textContent = 'Source metadata is unavailable';
+    }
+  }, 2000);
 }
 
 async function startCamera(camera, profile) {
@@ -331,7 +454,7 @@ async function startCamera(camera, profile) {
     camera.quality.value = result.profile;
     camera.state.textContent = 'Stream active';
     camera.active = true;
-    attach(camera, result.playlist);
+    attach(camera, result);
     showSource(camera, result.source);
     return true;
   } catch (error) {
@@ -540,7 +663,7 @@ async function loadCamera(item) {
       camera.quality.value = stream.profile;
       camera.state.textContent = 'Stream active';
       camera.active = true;
-      attach(camera, stream.playlist);
+      attach(camera, stream);
       showSource(camera, stream.source);
     } else {
       camera.active = false;
@@ -834,7 +957,7 @@ document.addEventListener('keydown', event => {
     for (const item of inventory) renderCamera(item);
     updateAllToggle();
     await Promise.all(inventory.map(loadCamera));
-    show(`${inventory.length} configured camera${inventory.length === 1 ? '' : 's'} loaded. FPS is measured from the live source.`);
+    show(`${inventory.length} configured camera${inventory.length === 1 ? '' : 's'} loaded.`);
     window.setInterval(() => { for (const camera of cameras.values()) syncRecording(camera); }, 2000);
   } catch (error) { showError(error.message); }
 })();
