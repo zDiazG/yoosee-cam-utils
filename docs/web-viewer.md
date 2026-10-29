@@ -38,11 +38,13 @@ from any address in the global allowlist. A configured per-user list narrows acc
 Video starts muted because browsers restrict autoplay with sound; unmute in the video
 controls. Profiles are labeled using advertised resolutions, which may
 differ from the mobile app's HD/FHD labels. Each camera card has a single stream toggle,
-profile selector and compact PTZ controls with its own movement duration. The global
+profile selector and centered PTZ toggle with its own movement duration. The global
 stream toggle starts all stopped cameras or stops all active cameras; with a mixed
 selection it stops the active streams. Bulk quality actions switch all cameras to Full
-HD when available or their lightest profile. The browser can save a preference
-to start Full HD streams when the page opens. An allowed source IP still needs a valid
+HD when available or their lightest profile. The hamburger menu switches between Home
+and Settings. Security / Access has separate Access and Users tabs and is shown only to
+web administrators. The browser can save a preference to start Full HD streams when the
+page opens. An allowed source IP still needs a valid
 account. The application allowlist does not change the host firewall; update that
 separately when a new subnet must reach the service. The server checks the TCP peer
 address. Source NAT therefore makes several clients appear as their gateway and removes

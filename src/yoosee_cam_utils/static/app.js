@@ -1,6 +1,9 @@
 const grid = document.querySelector('#camera-grid');
 const status = document.querySelector('#status');
 const autostart = document.querySelector('#autostart');
+const menuToggle = document.querySelector('#menu-toggle');
+const navMenu = document.querySelector('#nav-menu');
+const navSettings = document.querySelector('.nav-settings');
 const cameras = new Map();
 let editingUser = null;
 
@@ -25,14 +28,36 @@ async function api(path, data) {
 
 function show(message) { status.textContent = message; }
 function cameraPath(id, action) { return `/api/cameras/${encodeURIComponent(id)}/${action}`; }
+function closeNavigation() {
+  navMenu.hidden = true;
+  menuToggle.setAttribute('aria-expanded', 'false');
+  menuToggle.setAttribute('aria-label', 'Open navigation');
+}
+function showView(view) {
+  const home = view === 'home';
+  document.querySelector('#home-view').hidden = !home;
+  document.querySelector('#settings-view').hidden = home;
+  closeNavigation();
+}
+function showSecurityTab(tab) {
+  const users = tab === 'users';
+  const accessTab = document.querySelector('#access-tab');
+  const usersTab = document.querySelector('#users-tab');
+  document.querySelector('#access-panel').hidden = users;
+  document.querySelector('#users-panel').hidden = !users;
+  accessTab.setAttribute('aria-selected', String(!users));
+  usersTab.setAttribute('aria-selected', String(users));
+  accessTab.tabIndex = users ? -1 : 0;
+  usersTab.tabIndex = users ? 0 : -1;
+}
 function profileResolution(profile) {
   const video = profile.VideoEncoderConfiguration || {};
   return {width: Number(video.Width) || 0, height: Number(video.Height) || 0};
 }
 function labelProfile(profile) {
   const {width, height} = profileResolution(profile);
-  const type = width >= 1920 ? 'Full HD' : width >= 1280 ? 'HD' : 'Low bandwidth';
-  return `${width || '?'} × ${height || '?'} · ${type}`;
+  const type = width >= 1920 ? 'FHD' : width >= 1280 ? 'HD' : 'Low';
+  return `${width || '?'}x${height || '?'} - ${type}`;
 }
 function detach(camera) {
   if (camera.timer) clearInterval(camera.timer);
@@ -158,7 +183,7 @@ function renderCamera(item) {
   }
   const ptzDurationLabel = document.createElement('label');
   ptzDurationLabel.className = 'ptz-inline-duration';
-  ptzDurationLabel.append(document.createTextNode('Movement per click'));
+  ptzDurationLabel.append(document.createTextNode('Move'));
   const ptzDuration = document.createElement('input');
   ptzDuration.type = 'range';
   ptzDuration.min = '0.2';
@@ -543,10 +568,9 @@ autostart.checked = localStorage.getItem(AUTO_KEY) === 'true';
 autostart.onchange = () => localStorage.setItem(AUTO_KEY, String(autostart.checked));
 
 async function setupAdmin() {
-  const panel = document.querySelector('#admin-panel');
   try {
     const [users, networks] = await Promise.all([api('/api/admin/users'), api('/api/admin/networks')]);
-    panel.hidden = false;
+    navSettings.hidden = false;
     const list = document.querySelector('#user-list');
     list.replaceChildren();
     for (const user of users) {
@@ -638,6 +662,29 @@ document.querySelector('#add-network').onclick = async () => {
   try { await api('/api/admin/networks/add', {cidr}); document.querySelector('#new-network').value = ''; await setupAdmin(); show(`Added ${cidr} to the viewer allowlist.`); }
   catch (error) { show(error.message); }
 };
+
+menuToggle.onclick = () => {
+  navMenu.hidden = !navMenu.hidden;
+  menuToggle.setAttribute('aria-expanded', String(!navMenu.hidden));
+  menuToggle.setAttribute('aria-label', navMenu.hidden ? 'Open navigation' : 'Close navigation');
+};
+document.querySelector('#nav-home').onclick = () => showView('home');
+document.querySelector('#nav-settings').onclick = () => { showView('settings'); showSecurityTab('access'); };
+document.querySelector('#nav-security').onclick = () => { showView('settings'); showSecurityTab('access'); };
+document.querySelector('#access-tab').onclick = () => showSecurityTab('access');
+document.querySelector('#users-tab').onclick = () => showSecurityTab('users');
+document.addEventListener('click', event => {
+  if (!event.target.closest('.nav-control')) closeNavigation();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeNavigation();
+  if (event.target.getAttribute('role') === 'tab' && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+    event.preventDefault();
+    const next = event.target.id === 'access-tab' ? 'users' : 'access';
+    showSecurityTab(next);
+    document.querySelector(`#${next}-tab`).focus();
+  }
+});
 
 (async function initialize() {
   try {
