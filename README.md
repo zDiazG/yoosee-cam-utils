@@ -50,9 +50,12 @@ without media requests. All viewers share the selected profile.
 
 The viewer now has independent configured camera workers, per-camera controls, bulk
 start/stop and quality actions, a saved browser preference to start Full HD streams,
-and local viewer accounts with camera grants and source-IP restrictions. The initial
-web administrator uses the default camera login. Recording and a real second-camera
-test remain outstanding.
+and local viewer accounts with camera grants and source-IP restrictions. The first
+web administrator uses the default camera login. When manual recording is enabled in
+the local config, camera administrators can save bounded FHD clips to a quota-limited
+private spool. Continuous recording, automatic cleanup/delivery, and a real
+second-camera test remain outstanding. Camera admins can delete saved clips from
+their camera tiles; there is no automatic retention policy yet.
 
 Both profiles currently emit 15 fps. A reversible ONVIF write and reconnect test
 failed to change the FHD stream to 30 fps. The camera reported its configured limit

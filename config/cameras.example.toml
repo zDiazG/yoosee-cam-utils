@@ -18,3 +18,12 @@ tls_key = "~/.config/yoosee-cam-utils/tls/server.key"
 cache_dir = "~/.cache/yoosee-cam-utils/hls-runtime"
 hls_js = "~/.cache/yoosee-cam-utils/hls-v1.7.4/hls.min.js"
 hls_js_sha256 = "cfc70cc9e9fc63d071919e087670abc760c8fd1bc889b88588026e4d22193bbe"
+
+# Manual clips only. Continuous recording is not enabled by this setting.
+[recording]
+enabled = false
+spool_dir = "~/.local/state/yoosee-cam-utils/recordings"
+max_bytes = 2147483648
+reserve_bytes = 5368709120
+default_seconds = 30
+max_seconds = 300
