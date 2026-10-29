@@ -1,0 +1,8 @@
+credentials_file = "~/.config/yoosee-cam-utils.env"
+
+[cameras.cam01]
+host = "192.0.2.10"
+onvif_port = 5000
+rtsp_port = 554
+username_env = "CAM01_NVR_USERNAME"
+password_env = "CAM01_NVR_PASSWORD"
