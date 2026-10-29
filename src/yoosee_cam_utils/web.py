@@ -27,6 +27,7 @@ import uuid
 
 from .cli import Camera, load_config, media_input, redact, PTZ, SCHEMA
 from .recording import ClipManager
+from .live import LiveBuffer
 from xml.sax.saxutils import escape
 
 
@@ -45,6 +46,8 @@ class Streams:
         self.profile = None
         self.last_access = 0
         self.log = None
+        self.live = None
+        self.live_thread = None
 
     def profiles(self):
         with self.camera_lock:
@@ -53,10 +56,14 @@ class Streams:
     def _stop_worker(self):
         with self.state_lock:
             process, log, stream_dir = self.process, self.log, self.stream_dir
+            live, live_thread = self.live, self.live_thread
             self.process = None
             self.log = None
             self.stream_dir = None
             self.profile = None
+            self.live = self.live_thread = None
+        if live:
+            live.close()
         if process:
             if process.poll() is None:
                 process.terminate()
@@ -64,6 +71,10 @@ class Streams:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     process.kill(); process.wait()
+        if live_thread:
+            live_thread.join(timeout=2)
+        if process and process.stdout:
+            process.stdout.close()
         if log:
             log.close()
         if stream_dir and stream_dir.parent == self.directory:
@@ -95,33 +106,40 @@ class Streams:
             stream_dir = self.directory / uuid.uuid4().hex
             stream_dir.mkdir(mode=0o700)
             log = (stream_dir / "worker.log").open("wb")
-            args = ["ffmpeg", "-nostdin", "-v", "error", "-fflags", "+genpts", "-protocol_whitelist", "pipe,file,rtsp,tcp,udp,rtp", "-f", "concat", "-safe", "0", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-hls_time", "2", "-hls_list_size", "6", "-hls_delete_threshold", "2", "-hls_flags", "delete_segments+independent_segments+omit_endlist", "-hls_segment_filename", str(stream_dir / "seg%09d.ts"), "-f", "hls", str(stream_dir / "index.m3u8")]
+            args = ["ffmpeg", "-nostdin", "-v", "error", "-fflags", "+genpts", "-analyzeduration", "1000000", "-probesize", "262144", "-protocol_whitelist", "pipe,file,rtsp,tcp,udp,rtp", "-f", "concat", "-safe", "0", "-i", "pipe:0",
+                    "-map", "0:v:0", "-map", "0:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-max_interleave_delta", "100000", "-hls_time", "2", "-hls_list_size", "6", "-hls_delete_threshold", "2", "-hls_flags", "delete_segments+independent_segments+omit_endlist", "-hls_segment_filename", str(stream_dir / "seg%09d.ts"), "-f", "hls", str(stream_dir / "index.m3u8"),
+                    "-map", "0:v:0", "-map", "0:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-max_interleave_delta", "100000", "-movflags", "+empty_moov+default_base_moof+frag_keyframe", "-frag_duration", "200000", "-flush_packets", "1", "-f", "mp4", "pipe:1"]
             try:
-                process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log)
+                process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, bufsize=0)
             except BaseException:
                 log.close()
                 shutil.rmtree(stream_dir)
                 raise
             with self.state_lock:
                 self.stream_dir, self.log, self.process = stream_dir, log, process
+                self.live = LiveBuffer()
+                self.live_thread = threading.Thread(target=self.live.read, args=(process.stdout,), daemon=True)
+                self.live_thread.start()
                 self.profile = profile
                 self.last_access = time.monotonic()
             try:
-                process.stdin.write(media_input(uri, self.camera.c))
+                process.stdin.write(media_input(uri, self.camera.c) + b"option analyzeduration 1000000\noption probesize 262144\noption max_delay 100000\n")
                 process.stdin.close()
                 deadline = time.monotonic() + 15
                 while time.monotonic() < deadline:
-                    if (stream_dir / "index.m3u8").exists():
+                    if self.live.initialization and self.live.fragments and not self.live.closed:
                         return self.status(measure=True)
+                    if self.live.failed:
+                        break
                     if process.poll() is not None:
                         break
                     time.sleep(0.2)
-                raise ValueError("video worker did not produce a playlist")
+                raise ValueError("video worker did not produce live video")
             except BaseException:
                 if self.log:
                     self.log.flush()
                     detail = (stream_dir / "worker.log").read_text(errors="replace")[-2000:]
-                    print("HLS startup failed: " + redact(detail, self.camera.c), file=sys.stderr, flush=True)
+                    print("Video startup failed: " + redact(detail, self.camera.c), file=sys.stderr, flush=True)
                 self._stop_worker()
                 raise
 
@@ -130,9 +148,21 @@ class Streams:
             active = bool(self.process and self.process.poll() is None)
             stream_dir = self.stream_dir if active else None
             result = {"active": active, "profile": self.profile, "playlist": f"/media/{self.stream_dir.name}/index.m3u8" if active else None}
+            if active and self.live and self.live.initialization and not self.live.closed:
+                result.update(live=f"/live/{self.stream_dir.name}.mp4", mime=self.live.mime)
         if measure and stream_dir:
             result["source"] = self._measure_latest_segment(stream_dir)
         return result
+
+    def live_media(self, stream_id):
+        with self.state_lock:
+            if not self.stream_dir or stream_id != self.stream_dir.name or not self.live or self.live.closed:
+                raise FileNotFoundError()
+            return self.live
+
+    def touch(self):
+        with self.state_lock:
+            self.last_access = time.monotonic()
 
     @staticmethod
     def _measure_latest_segment(stream_dir):
@@ -229,6 +259,8 @@ class CameraRegistry:
             result = dict(result)
             if result.get("playlist"):
                 result["playlist"] = result["playlist"].replace("/media/", f"/media/{camera_id}/", 1)
+            if result.get("live"):
+                result["live"] = result["live"].replace("/live/", f"/live/{camera_id}/", 1)
         return result
 
     def summary(self):
@@ -616,6 +648,20 @@ class UserStore:
         with self.lock, self._session() as db:
             return [row[0] for row in db.execute("SELECT cidr FROM allowed_networks ORDER BY cidr")]
 
+    def can_continue_viewing(self, username, address, camera_id):
+        """Recheck long-lived media grants without repeating password hashing."""
+        with self.lock, self._session() as db:
+            row = db.execute("SELECT enabled FROM users WHERE username=?", (username,)).fetchone()
+            if not row or not row["enabled"]:
+                return False
+            allowed = [ipaddress.ip_network(item[0]) for item in db.execute("SELECT cidr FROM allowed_networks")]
+            owned = [ipaddress.ip_network(item[0]) for item in db.execute("SELECT cidr FROM user_networks WHERE username=?", (username,))]
+            if not any(address in network for network in allowed) or (owned and not any(address in network for network in owned)):
+                return False
+            if db.execute("SELECT 1 FROM user_roles WHERE username=? AND role='web_admin'", (username,)).fetchone():
+                return True
+            return db.execute("SELECT 1 FROM user_cameras WHERE username=? AND camera_id=?", (username, camera_id)).fetchone() is not None
+
     def add_networks(self, networks):
         normalized = self._normalize_networks(networks)
         with self.lock, self._session() as db:
@@ -695,6 +741,35 @@ class Handler(BaseHTTPRequestHandler):
         with path.open("rb") as stream:
             shutil.copyfileobj(stream, self.wfile, length=1024 * 1024)
 
+    def respond_live(self, camera_id, stream_id):
+        worker = self.server.cameras.get(camera_id)
+        live = worker.live_media(stream_id)
+        if not live.clients.acquire(blocking=False):
+            self.respond(429, b'{"error":"Too many live viewers."}')
+            return
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            check_at = 0
+            for chunk in live.chunks():
+                if time.monotonic() >= check_at:
+                    if not self.server.users.can_continue_viewing(self.auth_user["username"], ipaddress.ip_address(self.client_address[0]), camera_id):
+                        break
+                    check_at = time.monotonic() + 2
+                worker.touch()
+                if chunk:
+                    self.wfile.write(chunk)
+        except (OSError, ValueError):
+            # A cancelled or slow browser is local to this subscriber.
+            self.close_connection = True
+        finally:
+            live.clients.release()
+
     def authorized(self):
         ip = ipaddress.ip_address(self.client_address[0])
         if not self.server.users.is_global_network_allowed(ip):
@@ -754,6 +829,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/admin/networks":
                 if self.require_web_admin():
                     self.respond(200, json.dumps(self.server.users.list_networks()).encode())
+            elif re.fullmatch(r"/live/[A-Za-z0-9_-]+/[a-f0-9]{32}\.mp4", path):
+                camera_id, filename = path.split("/")[2:]
+                if not self.can_camera(camera_id, "view"): return
+                self.respond_live(camera_id, filename[:-4])
             elif re.fullmatch(r"/api/cameras/[^/]+/(profiles|status)", path):
                 _, _, _, camera_id, operation = path.split("/")
                 if not self.can_camera(camera_id, "view"): return

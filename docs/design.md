@@ -8,20 +8,28 @@ It must work without Frigate or a vendor cloud account. All project text is Engl
 
 The running prototype uses Python 3.11 standard-library HTTPS, vanilla HTML/CSS/JS,
 hls.js and FFmpeg. Node.js is not a runtime dependency. The web service supports
-independent configured camera workers, local application accounts and per-camera
-grants. Recording remains planned.
+independent configured camera workers, local application accounts, per-camera grants
+and bounded manual recording.
 
 The user accepted the current viewer and PTZ. A left-button web click physically
 moved and stopped the camera. Other directions need individual observation. The
-one-segment HLS target measured 4.2–4.4 seconds behind the playlist edge over 65
-seconds; this excludes delay before HLS. The UI reports that distinction. Source
-keyframes currently produce four-second segments.
+current default uses fragmented MP4 with MediaSource over the existing authenticated
+HTTPS listener. Video is copied, audio is converted to AAC, and fragments are flushed
+every 200 ms without waiting for each camera keyframe. One RTSP connection also
+produces the HLS compatibility fallback. A bounded RAM cache supports new subscribers;
+slow subscribers disconnect instead of building an unbounded queue. Active connections
+recheck account, camera and source grants every two seconds. The browser follows the
+received edge and removes old buffered media. Its buffered-duration label excludes
+camera and network delay. HLS still depends on the camera's four-second keyframes.
 
-Both observed RTSP profiles emit 15 fps: main 1920×1080 and substream 640×360. ONVIF
+Earlier checks reported 15 fps on main 1920×1080 and substream 640×360. ONVIF
 reports a 30 fps encoder limit, but a reversible 15/30 encoder write, readback and
 reconnect experiment left the FHD stream at 15 fps. The original encoder configuration
 was restored and two fresh segments verified at 15 fps. No evidence supports 60 fps.
-The viewer reports measured source FPS and does not offer an unverified FPS selector.
+Later packet/timestamp counts measured 10.0 and 10.1 fps respectively, matching about
+10 fps decoded by the browser without dropped frames. The cause of the camera's frame
+cadence change is unverified. The viewer separates measured browser throughput from
+source-reported FPS and does not offer an unverified FPS selector.
 
 ## Independent cameras and a shared control panel
 
@@ -72,7 +80,8 @@ Accounts can combine the `web_admin`, `camera_admin` and `viewer` roles. A web
 administrator manages accounts and has access to every configured camera. A camera
 administrator can control assigned cameras; a viewer can only watch assigned cameras.
 Camera IDs accept configured names or an unambiguous numeric suffix, and `ALL` expands
-to the configured cameras. The UI can select every role currently exposed by the server.
+to the configured cameras. The compact multi-select dropdown shows ALL when every
+server-exposed role is selected.
 The initial web administrator is bootstrapped from the default camera login. The
 account database is mode 0600 under the service user's state directory. New account
 passwords require 12 to 256 characters. Account and source-network inputs are bounded

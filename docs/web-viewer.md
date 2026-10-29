@@ -1,8 +1,9 @@
 # HTTPS viewer
 
 The optional Python server serves video, audio and PTZ over a single HTTPS port.
-Authentication is checked by the server for the page, API, playlist and every video
-segment. It uses the camera username/password from the private credential file.
+Authentication is checked by the server for the page, API and media. Long-lived live
+connections recheck account status, camera access and source restrictions every two
+seconds. The initial administrator uses the camera login from the private credential file.
 No credential is embedded in JavaScript. Invalid logins are rate limited; network
 sources must also match the configured allowlist. PTZ POSTs require a custom header
 and reject cross-origin browser requests.
@@ -33,8 +34,8 @@ administrators and viewers, combine these roles on one account, edit grants, set
 reset passwords, restrict each user to source networks, disable accounts and manage
 the viewer's global source allowlist. Web administrators also have view and control
 access to every configured camera. Camera-administrator and viewer grants can be
-combined and scoped per camera. The role picker includes All roles and selects every
-role currently exposed by the server.
+combined and scoped per camera. Roles use a compact multi-select dropdown. ALL selects
+every role currently exposed by the server and remains the collapsed dropdown label.
 Password hashes are stored in the private SQLite database configured by
 `auth_database`; new or reset passwords need 12 to 256 characters. The database file
 is created with mode 0600. New accounts require at least one source IP or CIDR.
@@ -61,11 +62,20 @@ per-client IP isolation; preserve source addresses or use a separately trusted i
 before relying on per-user IP restrictions. Forwarded headers are not trusted.
 Default-route CIDRs are rejected.
 
-HLS playback targets one four-second segment behind the live edge. The page shows
-the player's measured delay from that edge. This does not include delay inside the
-camera's RTSP feed. If playback falls behind, hls.js may briefly increase playback
-speed up to 1.1×; if lag exceeds three target segments, it seeks back toward the live
-target. PTZ requests use the selected movement duration (0.2–1.0 seconds, default
+Live playback prefers fragmented MP4 through MediaSource in compatible browsers.
+FFmpeg copies H.264 video and converts audio to AAC, flushing fragments every 200 ms
+over authenticated HTTPS. This uses the existing port and requires no extra service,
+WebSocket listener or WebRTC media port. Each camera has one RTSP ingest shared by
+its live subscribers and HLS output. The server retains at most 8 MiB and 12 seconds
+of fragments per camera, permits eight live clients per camera, and disconnects slow
+clients when they fall behind the cache. The browser follows about 0.3–0.8 seconds
+behind received media and trims old buffered data. The label reports this buffer,
+not total camera-to-screen latency. Pausing suspends catch-up until playback resumes.
+
+Browsers without the required MediaSource codec support use HLS. That fallback still
+depends on camera keyframe spacing and cannot promise one-second latency. Its buffer
+is bounded and stalls do not keep increasing its synchronization target.
+PTZ requests use the selected movement duration (0.2–1.0 seconds, default
 0.8) and an explicit stop. The server rejects values outside the slider range. The
 request sends an ONVIF duration such as `PT0.8S`.
 This is a timed pulse, not a calibrated angle. Stream controls affect the shared
@@ -95,21 +105,21 @@ limit; validate that behavior before enabling continuous capture.
 
 ## Current limitations
 
-The lightweight profile works on the tested camera. The HLS playlist has four-second
-segments because the copied camera stream provides keyframes at that interval. A
-headless browser measured 8.2 seconds of latency with the prior two-segment target,
-stable over 90 seconds. The deployed one-segment target measured 4.2–4.4 seconds over
-65 seconds, stable and without fatal playback errors. This measures player delay from
-the HLS edge, not camera-to-server delay. The page now displays this measurement so
-the two can be distinguished. A headless browser cannot confirm the perceived camera-
-to-screen delay on the user's device.
+The current FHD MediaSource path played at 1920x1080 for a 30-second browser sample
+with 0.65–0.72 seconds buffered, no dropped frames and no browser errors. The camera
+OSD clock was approximately 1–2 seconds behind the capture time, with one-second OSD
+precision and no independently verified camera-clock offset. This does not establish
+an absolute end-to-end latency guarantee. The ingest probe delivered fragments at a
+median interval of 0.197 seconds and a maximum interval of 0.267 seconds. Longer runs,
+concurrent cameras, remote clients and the lightweight MediaSource profile need their
+own acceptance evidence. HLS remains a compatibility fallback with longer latency.
 
 The web PTZ uses the camera-compatible WS-Addressing SOAP serialization. A physical
 browser click moved the camera left and it stopped. The slider sends a duration from
 0.2 to 1.0 seconds in 0.1-second steps, defaulting to 0.8 seconds. Other directions
 and playback continuity during movement remain unverified.
 
-Live RTSP and HLS segment probes of both profiles report 15 fps: 1920×1080 for the
+Live RTSP and HLS segment metadata of both profiles report 15 fps: 1920×1080 for the
 main stream and 640×360 for the substream. Each four-second FHD segment contains 60
 frames. ONVIF reports a 30 fps configured limit, but the emitted stream remains at
 15 fps. I tested the saved main encoder configuration with requested limits of 15 and
@@ -117,7 +127,13 @@ frames. ONVIF reports a 30 fps configured limit, but the emitted stream remains 
 stream stayed at 15 in every case. I restored the saved encoder configuration and
 verified another two FHD segments at 15 fps. The inspected ONVIF options do not
 advertise 60 fps. No FPS selector is exposed because the camera ignored the 30 fps
-change; the UI displays measured output FPS instead.
+change. A later packet/timestamp count measured 10.0 fps on FHD over 9.3 seconds and
+10.1 fps on the lightweight profile over 9.7 seconds, with a median 0.1-second frame
+interval. The browser decoded about 10 fps without dropped frames. These observations
+show that metadata can overstate the delivered rate; they do not identify the camera's
+reason for changing frame cadence. The MediaSource UI therefore displays browser frame
+throughput separately from the source-reported rate. Changing playback transport does
+not create additional camera frames.
 
 The camera grid has independent configured workers, profile selectors and stream
 toggles, compact per-camera PTZ and recording controls, and bulk start/stop and quality
