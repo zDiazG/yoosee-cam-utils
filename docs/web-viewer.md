@@ -100,10 +100,15 @@ configured byte limit and free-space reserve; when either is reached, the sessio
 stops with a status message.
 
 Each saved segment is copied into MP4 without video transcoding, verified with ffprobe
-and has a sidecar with camera ID, owner, sequence number, UTC start/end, dimensions,
-measured FPS, duration, size and SHA-256. A sequence counter survives clip deletion.
-The browser localizes the weekday/date label; the inline filename uses the camera ID,
-English short weekday, local timestamp to seconds, sequence and FHD/HD/SD label.
+and has a sidecar with camera ID, owner, UUID, UTC start/end, dimensions, measured FPS,
+duration, size and SHA-256. The UUID is the permanent clip identity in the filename
+and sidecar. It is generated independently for every capture, so deletion does not
+rewind an allocator and multiple storage writers need no shared counter or ID
+database. The browser localizes the weekday/date label; the display title uses
+camera ID, weekday, local timestamp to seconds and FHD/HD/SD. If clips are near
+duplicates (same camera/resolution, start and end within 30 seconds, duration within
+a 2:1 ratio, and at least 80% overlap), the UI appends each clip's own short UUID
+prefix to distinguish them. This is computed from sidecars at listing time.
 Startup removes incomplete temporary files and media without a valid sidecar.
 
 The Media page plays clips in the client's browser with HTTP byte-range requests. The
