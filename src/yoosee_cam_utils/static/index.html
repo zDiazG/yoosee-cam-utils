@@ -4,6 +4,7 @@
 <main><h1>Local camera</h1><p>Local video with playback delay. No cloud uploads.</p>
 <section><label>Quality <select id="profiles"></select></label><button id="start">Start or retry video</button><button id="stop">Stop video</button></section>
 <video id="video" controls autoplay muted playsinline></video>
+<section class="ptz-settings"><label for="ptz-duration">Movement per click</label><input id="ptz-duration" type="range" min="0.2" max="1" step="0.1" value="0.8"><output id="ptz-duration-value">0.8 s</output></section>
 <section class="ptz"><button data-pan="0" data-tilt="0.25">↑</button><div><button data-pan="-0.25" data-tilt="0">←</button><button id="ptz-stop">Stop PTZ</button><button data-pan="0.25" data-tilt="0">→</button></div><button data-pan="0" data-tilt="-0.25">↓</button></section>
-<p>Each click requests a short movement. Use the video controls for audio and fullscreen. PTZ compatibility remains under investigation.</p><output id="status" aria-live="polite">Loading profiles...</output>
+<p>The slider sets how long each movement command lasts. Use video controls for audio and fullscreen.</p><output id="status" aria-live="polite">Loading profiles...</output>
 </main><script src="/vendor/hls.min.js"></script><script src="/app.js"></script></html>

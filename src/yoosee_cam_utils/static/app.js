@@ -1,14 +1,16 @@
 const video=document.querySelector('#video'), profiles=document.querySelector('#profiles'), status=document.querySelector('#status');
+const ptzDuration=document.querySelector('#ptz-duration'), ptzDurationValue=document.querySelector('#ptz-duration-value');
 let player=null, busy=false, generation=0;
 async function api(path,data){const r=await fetch(path,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Camera-Client':'1'},body:JSON.stringify(data)});if(!r.ok)throw Error(`Request failed (${r.status}). Check the camera and try again.`);return r.json();}
 function show(text){status.textContent=text;}
 function detach(){if(player){player.destroy();player=null;}video.pause();video.removeAttribute('src');video.load();}
 function attach(url,current){if(current!==generation)return;if(Hls.isSupported()){player=new Hls({enableWorker:false,liveSyncDurationCount:2,maxBufferLength:15});player.loadSource(url);player.attachMedia(video);player.on(Hls.Events.ERROR,(_,d)=>{if(d.fatal&&current===generation)show('Video failed. Try opening it again.');});}else if(video.canPlayType('application/vnd.apple.mpegurl'))video.src=url;else throw Error('This browser does not support HLS.');video.play().catch(()=>{});}
-async function action(fn){if(busy)return;busy=true;document.querySelectorAll('button,select').forEach(b=>b.disabled=true);try{await fn();}catch(e){show(e.message);}finally{busy=false;document.querySelectorAll('button,select').forEach(b=>b.disabled=false);}}
+async function action(fn){if(busy)return;busy=true;document.querySelectorAll('button,select,input').forEach(b=>b.disabled=true);try{await fn();}catch(e){show(e.message);}finally{busy=false;document.querySelectorAll('button,select,input').forEach(b=>b.disabled=false);}}
 async function switchProfile(profile){const current=++generation;detach();show('Switching video quality...');const r=await api('/api/start',{profile});if(current!==generation)return;profiles.value=r.profile;attach(r.playlist,current);show('Video active. Audio starts muted; use the video controls to unmute.');}
 document.querySelector('#start').onclick=()=>action(async()=>{await switchProfile(profiles.value);});
 document.querySelector('#stop').onclick=()=>action(async()=>{await api('/api/stop',{});generation++;detach();show('Video stopped.');});
 profiles.onchange=()=>action(async()=>{await switchProfile(profiles.value);});
-document.querySelectorAll('[data-pan]').forEach(b=>b.onclick=()=>action(async()=>{await api('/api/ptz',{pan:Number(b.dataset.pan),tilt:Number(b.dataset.tilt),seconds:.2});show('PTZ request accepted. Physical movement is not verified.');}));
+ptzDuration.oninput=()=>{ptzDurationValue.textContent=`${Number(ptzDuration.value).toFixed(1)} s`;};
+document.querySelectorAll('[data-pan]').forEach(b=>b.onclick=()=>action(async()=>{await api('/api/ptz',{pan:Number(b.dataset.pan),tilt:Number(b.dataset.tilt),seconds:Number(ptzDuration.value)});show('PTZ movement command sent.');}));
 document.querySelector('#ptz-stop').onclick=()=>action(async()=>{await api('/api/ptz',{stop:true});show('PTZ stop request accepted.');});
 (async()=>{try{const p=await api('/api/profiles');for(const item of p){const v=item.VideoEncoderConfiguration||{},o=document.createElement('option');o.value=item.token;const label=Number(v.Width)>=1920?'Full HD':Number(v.Width)>=1280?'HD':'low bandwidth';o.textContent=`${v.Width||'?'}×${v.Height||'?'} (${label})`;profiles.append(o);}let s=await api('/api/status');if(!s.active){show('Starting video...');s=await api('/api/start',{profile:profiles.value});}profiles.value=s.profile;generation++;attach(s.playlist,generation);show('Video active. Use the video controls to unmute audio.');}catch(e){show(e.message);}})();

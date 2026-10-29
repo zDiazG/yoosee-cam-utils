@@ -33,10 +33,11 @@ Profiles are labeled using the resolutions advertised by the camera, which may
 differ from its mobile app's HD/FHD labels. Changing the profile replaces the current
 player and starts the selected stream; Start or retry is available if startup fails.
 
-HLS introduces several seconds of video delay. PTZ requests are short movements
-with a timeout and an explicit stop; do not repeatedly click while waiting for the
-delayed video to catch up. The active quality and Stop Video action are shared by
-all viewers. A worker is stopped after 120 seconds without media requests.
+HLS introduces several seconds of video delay. PTZ requests use the selected
+movement duration (0.2–1.0 seconds) and an explicit stop. This is a timed pulse,
+not a calibrated angle; do not repeatedly click while waiting for delayed video to
+catch up. The active quality and Stop Video action are shared by all viewers. A
+worker is stopped after 120 seconds without media requests.
 
 ## Current limitations
 
@@ -45,9 +46,16 @@ stabilize in the user's browser, but server-side HLS output remained continuous 
 26-second sample; the browser delay's cause is not established. A bounded
 WS-Addressing PTZ request moved the camera right and the user confirmed it stopped.
 The web API now uses that request format, and its integrated movement call returned
-HTTP200 with Stop confirmed. Other directions and playback continuity during movement
-remain unverified. No source-FPS setting is currently exposed. All project text and
-UI strings must remain English.
+HTTP 200 with Stop confirmed. The user also observed a direct 0.8-second rightward
+pulse and its stop. The UI lets the operator adjust pulse duration from 0.2 to 1.0
+seconds. Other directions and playback continuity during movement remain unverified.
+
+The current RTSP main stream was observed at 1920×1080, 15 fps. ONVIF options report
+that the main profile can be configured up to 30 fps, but no 30 fps RTSP capture has
+been verified. The camera did not advertise 60 fps in the inspected ONVIF options.
+The ONVIF current-configuration response disagrees with the actual RTSP stream, so
+changing encoder settings requires a separate reversible test and stream verification.
+All project text and UI strings must remain English.
 
 ## User service
 

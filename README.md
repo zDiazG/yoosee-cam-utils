@@ -43,15 +43,17 @@ Captured errors redact the configured password. Media and private configuration
 are ignored by Git. No cloud upload, firmware change or continuous recorder is installed.
 
 An optional [HTTPS viewer](docs/web-viewer.md) provides server authentication,
-video/audio, profile selection and short PTZ movements. Its HLS worker preserves
+video/audio, profile selection and short PTZ movements with an adjustable pulse
+duration. Its HLS worker preserves
 the source video and converts audio to AAC for browsers. It stops after two minutes
 without media requests. All viewers share the selected profile.
 
 The viewer is a prototype. Lightweight playback works on the tested device; Full HD
 can take minutes to settle after startup. The web PTZ path now uses WS-Addressing; a
 bounded rightward move was physically confirmed, while other directions still need
-validation. Automatic quality switching is implemented. Verified source-FPS controls
-remain pending. These capabilities are not regular-use acceptance yet.
+validation. The current RTSP stream reports 15 fps; ONVIF advertises up to 30 fps for
+the main profile, but a 30 fps stream has not been captured and 60 fps is not advertised.
+These capabilities are not regular-use acceptance yet.
 
 See [design and requirements](docs/design.md) for the planned recording and
 verified-transfer behavior. Continuous recording and event uploads are not implemented.
