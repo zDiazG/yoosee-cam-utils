@@ -50,11 +50,12 @@ HTTP 200 with Stop confirmed. The user also observed a direct 0.8-second rightwa
 pulse and its stop. The UI lets the operator adjust pulse duration from 0.2 to 1.0
 seconds. Other directions and playback continuity during movement remain unverified.
 
-The current RTSP main stream was observed at 1920×1080, 15 fps. ONVIF options report
-that the main profile can be configured up to 30 fps, but no 30 fps RTSP capture has
-been verified. The camera did not advertise 60 fps in the inspected ONVIF options.
-The ONVIF current-configuration response disagrees with the actual RTSP stream, so
-changing encoder settings requires a separate reversible test and stream verification.
+Live RTSP probes of both profiles report 15 fps: 1920×1080 for the main stream and
+640×360 for the substream. ONVIF `GetProfiles` reports a 30 fps frame-rate limit for
+both, but the observed streams remain at 15 fps. The inspected ONVIF options do not
+advertise 60 fps. The ONVIF configuration and emitted streams disagree, so no FPS
+selector is exposed until a reversible encoder-setting test demonstrates that it
+changes the actual stream.
 All project text and UI strings must remain English.
 
 ## User service

@@ -51,8 +51,9 @@ without media requests. All viewers share the selected profile.
 The viewer is a prototype. Lightweight playback works on the tested device; Full HD
 can take minutes to settle after startup. The web PTZ path now uses WS-Addressing; a
 bounded rightward move was physically confirmed, while other directions still need
-validation. The current RTSP stream reports 15 fps; ONVIF advertises up to 30 fps for
-the main profile, but a 30 fps stream has not been captured and 60 fps is not advertised.
+validation. Live RTSP probes of both profiles report 15 fps. ONVIF `GetProfiles` reports
+a 30 fps frame-rate limit for each profile, but the camera still emits 15 fps; 60 fps
+is not advertised.
 These capabilities are not regular-use acceptance yet.
 
 See [design and requirements](docs/design.md) for the planned recording and
