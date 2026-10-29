@@ -4,8 +4,13 @@ const autostart = document.querySelector('#autostart');
 const menuToggle = document.querySelector('#menu-toggle');
 const navMenu = document.querySelector('#nav-menu');
 const navSettings = document.querySelector('.nav-settings');
+const toast = document.querySelector('#notice-toast');
+const toastMessage = document.querySelector('#notice-message');
 const cameras = new Map();
 let editingUser = null;
+let roleOptions = [];
+let cameraOptions = [];
+let toastTimer = null;
 
 const AUTO_KEY = 'yoosee.autostart-full-hd';
 const RECORD_LIMIT_KEY = 'yoosee.recording-limit-minutes';
@@ -27,6 +32,17 @@ async function api(path, data) {
 }
 
 function show(message) { status.textContent = message; }
+function showError(message) {
+  const safeMessage = String(message || 'The request failed. Check the values and try again.');
+  show(safeMessage);
+  toastMessage.textContent = safeMessage;
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, 9000);
+}
+function parseList(value) {
+  return value.split(/[,;\s]+/).map(item => item.trim()).filter(Boolean);
+}
 function cameraPath(id, action) { return `/api/cameras/${encodeURIComponent(id)}/${action}`; }
 function closeNavigation() {
   navMenu.hidden = true;
@@ -293,7 +309,7 @@ async function sendPtz(camera, pan, tilt, seconds, stop = false) {
     await api(cameraPath(camera.id, 'ptz'), stop ? {stop: true} : {pan, tilt, seconds});
     show(stop ? `${camera.name || camera.id}: PTZ stopped.` : `${camera.name || camera.id}: PTZ movement complete.`);
   } catch (error) {
-    show(`${camera.name || camera.id}: ${error.message}`);
+    showError(`${camera.name || camera.id}: ${error.message}`);
   } finally {
     camera.ptzBusy = false;
     for (const control of camera.ptz.querySelectorAll('button')) control.disabled = false;
@@ -322,6 +338,7 @@ async function startCamera(camera, profile) {
     detach(camera);
     camera.active = false;
     camera.state.textContent = error.message;
+    showError(`${camera.name || camera.id}: ${error.message}`);
     return false;
   } finally {
     camera.streamBusy = false;
@@ -342,6 +359,7 @@ async function stopCamera(camera) {
     return true;
   } catch (error) {
     camera.state.textContent = error.message;
+    showError(`${camera.name || camera.id}: ${error.message}`);
     return false;
   } finally {
     camera.streamBusy = false;
@@ -423,9 +441,9 @@ async function syncRecording(camera) {
 
 async function startRecording(camera) {
   const profile = preferredProfile(camera, 'fhd');
-  if (!profile) { show(`${camera.name || camera.id}: no Full HD profile is available.`); return; }
+  if (!profile) { showError(`${camera.name || camera.id}: no Full HD profile is available.`); return; }
   let maxSeconds;
-  try { maxSeconds = chosenLimit(camera); } catch (error) { show(error.message); return; }
+  try { maxSeconds = chosenLimit(camera); } catch (error) { showError(error.message); return; }
   if (camera.recordBusy) return;
   camera.recordBusy = true;
   camera.recordAction = 'start';
@@ -439,7 +457,7 @@ async function startRecording(camera) {
     show(`${camera.name || camera.id}: recording started. Clips are saved every 15 minutes.`);
   } catch (error) {
     camera.record.disabled = false;
-    show(`${camera.name || camera.id}: ${error.message}`);
+    showError(`${camera.name || camera.id}: ${error.message}`);
   } finally {
     camera.recordBusy = false;
     updateRecordingToggle(camera);
@@ -459,7 +477,7 @@ async function stopRecording(camera) {
     show(`${camera.name || camera.id}: stopping recording and finalizing the current clip…`);
     window.setTimeout(() => syncRecording(camera), 1000);
   } catch (error) {
-    show(`${camera.name || camera.id}: ${error.message}`);
+    showError(`${camera.name || camera.id}: ${error.message}`);
   } finally {
     camera.recordBusy = false;
     updateRecordingToggle(camera);
@@ -496,7 +514,7 @@ async function loadClips(camera) {
           await loadClips(camera);
           show(`${camera.name || camera.id}: clip deleted.`);
         } catch (error) {
-          show(error.message);
+          showError(error.message);
           remove.disabled = false;
         }
       };
@@ -535,6 +553,7 @@ async function loadCamera(item) {
   } catch (error) {
     camera.state.textContent = error.message;
     camera.source.textContent = 'Source unavailable';
+    showError(`${camera.name || camera.id}: ${error.message}`);
   }
 }
 
@@ -569,30 +588,66 @@ autostart.onchange = () => localStorage.setItem(AUTO_KEY, String(autostart.check
 
 async function setupAdmin() {
   try {
-    const [users, networks] = await Promise.all([api('/api/admin/users'), api('/api/admin/networks')]);
+    const [users, networks, roles, inventory] = await Promise.all([
+      api('/api/admin/users'), api('/api/admin/networks'), api('/api/admin/roles'), api('/api/cameras'),
+    ]);
     navSettings.hidden = false;
+    roleOptions = roles;
+    cameraOptions = inventory;
+    renderRoleChoices(roleOptions);
     const list = document.querySelector('#user-list');
     list.replaceChildren();
     for (const user of users) {
       const item = document.createElement('div');
       item.className = 'admin-item';
-      const label = document.createElement('span');
-      label.textContent = `${user.username} · ${user.role} · ${user.enabled ? 'enabled' : 'disabled'}`;
-      item.append(label);
+      const heading = document.createElement('div');
+      heading.className = 'admin-item-heading';
+      const username = document.createElement('strong');
+      username.textContent = user.username;
+      const state = document.createElement('span');
+      state.className = `state-chip ${user.enabled ? 'is-enabled' : 'is-disabled'}`;
+      state.textContent = user.enabled ? 'Enabled' : 'Disabled';
+      heading.append(username, state);
+      item.append(heading);
+      const detail = document.createElement('p');
+      detail.className = 'admin-item-detail role-detail';
+      const roleNames = (user.roles || [user.role]).map(role => roleOptions.find(option => option.id === role)?.label || role);
+      detail.textContent = `Roles: ${roleNames.join(', ') || 'None'}`;
+      item.append(detail);
+      const cameraDetail = document.createElement('p');
+      cameraDetail.className = 'admin-item-detail camera-detail';
+      const viewIds = Object.keys(user.cameras || {}).filter(id => user.cameras[id] === 'viewer');
+      const controlIds = Object.keys(user.cameras || {}).filter(id => user.cameras[id] === 'camera_admin');
+      const cameraLabels = [];
+      if (viewIds.length) cameraLabels.push(`View: ${viewIds.join(', ')}`);
+      if (controlIds.length) cameraLabels.push(`Control: ${controlIds.join(', ')}`);
+      if ((user.roles || [user.role]).includes('web_admin')) cameraLabels.push('Web access to all cameras');
+      cameraDetail.textContent = `Cameras: ${cameraLabels.join(' · ') || 'None'}`;
+      item.append(cameraDetail);
+      const networkDetail = document.createElement('p');
+      networkDetail.className = 'admin-item-detail network-detail';
+      networkDetail.textContent = `Source: ${(user.networks || []).join(', ') || 'No source restriction'}`;
+      item.append(networkDetail);
+      const actions = document.createElement('div');
+      actions.className = 'admin-item-actions';
       const edit = document.createElement('button');
       edit.textContent = 'Edit access';
       edit.onclick = () => {
         editingUser = user.username;
         document.querySelector('#new-username').value = user.username;
         document.querySelector('#new-username').disabled = true;
-        document.querySelector('#new-role').value = user.role;
-        document.querySelector('#new-cameras').value = Object.keys(user.cameras).join(',');
+        setSelectedRoles(user.roles || [user.role]);
+        document.querySelector('#new-view-cameras').value = viewIds.join(', ');
+        document.querySelector('#new-control-cameras').value = controlIds.join(', ');
         document.querySelector('#new-networks').value = user.networks.join(',');
         document.querySelector('#new-password').disabled = false;
+        document.querySelector('#new-password').required = false;
+        document.querySelector('#new-password').value = '';
         document.querySelector('#create-user').textContent = 'Save access';
         document.querySelector('#cancel-edit').hidden = false;
+        document.querySelector('#new-username').focus();
       };
-      item.append(edit);
+      actions.append(edit);
       const toggle = document.createElement('button');
       toggle.textContent = user.enabled ? 'Disable' : 'Enable';
       toggle.onclick = async () => {
@@ -600,9 +655,10 @@ async function setupAdmin() {
           await api(`/api/admin/users/${user.enabled ? 'disable' : 'enable'}`, {username: user.username});
           await setupAdmin();
           show(`${user.enabled ? 'Disabled' : 'Enabled'} ${user.username}.`);
-        } catch (error) { show(error.message); }
+        } catch (error) { showError(error.message); }
       };
-      item.append(toggle);
+      actions.append(toggle);
+      item.append(actions);
       list.append(item);
     }
     const networkList = document.querySelector('#network-list');
@@ -617,30 +673,92 @@ async function setupAdmin() {
       button.textContent = 'Remove';
       button.onclick = async () => {
         try { await api('/api/admin/networks/remove', {cidr}); await setupAdmin(); show(`Removed ${cidr} from the viewer allowlist.`); }
-        catch (error) { show(error.message); }
+        catch (error) { showError(error.message); }
       };
       item.append(label, button);
       networkList.append(item);
     }
   } catch (error) {
-    if (error.status !== 403) show(error.message);
+    if (error.status !== 403) showError(error.message);
   }
 }
 
+function renderRoleChoices(options) {
+  const list = document.querySelector('#role-options');
+  list.replaceChildren();
+  for (const role of options) {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = role.id;
+    input.dataset.roleChoice = 'true';
+    input.onchange = updateAllRoles;
+    label.append(input, document.createTextNode(role.label));
+    list.append(label);
+  }
+}
+
+function updateAllRoles() {
+  const choices = [...document.querySelectorAll('[data-role-choice]')];
+  document.querySelector('#role-all').checked = choices.length > 0 && choices.every(choice => choice.checked);
+}
+
+function setSelectedRoles(selected) {
+  const roles = new Set(selected);
+  for (const choice of document.querySelectorAll('[data-role-choice]')) choice.checked = roles.has(choice.value);
+  updateAllRoles();
+}
+
+document.querySelector('#role-all').onchange = event => {
+  for (const choice of document.querySelectorAll('[data-role-choice]')) choice.checked = event.target.checked;
+};
+
 document.querySelector('#create-user').onclick = async () => {
-  const role = document.querySelector('#new-role').value;
-  const camerasInput = document.querySelector('#new-cameras').value.split(',').map(value => value.trim()).filter(Boolean);
-  const networks = document.querySelector('#new-networks').value.split(',').map(value => value.trim()).filter(Boolean);
-  const permission = role === 'camera_admin' ? 'camera_admin' : 'viewer';
-  const camera_permissions = role === 'web_admin' ? {} : Object.fromEntries(camerasInput.map(id => [id, permission]));
+  const roles = [...document.querySelectorAll('[data-role-choice]:checked')].map(choice => choice.value);
+  const viewInput = parseList(document.querySelector('#new-view-cameras').value);
+  const controlInput = parseList(document.querySelector('#new-control-cameras').value);
+  const networks = parseList(document.querySelector('#new-networks').value);
+  const camera_permissions = Object.create(null);
+  const byNumericAlias = token => {
+    if (cameraOptions.some(item => item.id === token)) return token;
+    if (!/^\d+$/.test(token)) return null;
+    const matches = cameraOptions.filter(item => {
+      const suffix = String(item.id).match(/(\d+)$/)?.[1];
+      return suffix !== undefined && Number(suffix) === Number(token);
+    });
+    return matches.length === 1 ? matches[0].id : null;
+  };
+  const applyCameras = (tokens, permission) => {
+    for (const token of tokens) {
+      if (token.toLowerCase() === 'all') {
+        for (const camera of cameraOptions) camera_permissions[camera.id] = permission;
+        continue;
+      }
+      const id = byNumericAlias(token);
+      if (!id) throw Error(`Unknown camera ID: ${token}`);
+      if (camera_permissions[id] !== 'camera_admin') camera_permissions[id] = permission;
+    }
+  };
+  const password = document.querySelector('#new-password').value;
+  if (!roles.length) { showError('Select one or more roles, or choose All permissions.'); return; }
+  if (password && (password.length < 12 || password.length > 256)) { showError('Passwords must be 12 to 256 characters.'); return; }
+  if (!editingUser && password.length < 12) { showError('Use a password with at least 12 characters.'); return; }
+  if (!networks.length) { showError('Enter at least one allowed source IP or CIDR.'); return; }
+  try {
+    if (viewInput.length && !roles.includes('viewer')) throw Error('Select Viewer to grant view-only camera access.');
+    if (controlInput.length && !roles.includes('camera_admin')) throw Error('Select Camera administrator to grant camera control.');
+    applyCameras(viewInput, 'viewer');
+    applyCameras(controlInput, 'camera_admin');
+  } catch (error) { showError(error.message); return; }
   const username = editingUser || document.querySelector('#new-username').value.trim();
   const editing = Boolean(editingUser);
+  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(username)) { showError('Use 1 to 64 letters, numbers, dots, underscores, or hyphens for the username.'); return; }
   try {
-    await api(editing ? '/api/admin/users/access' : '/api/admin/users', {username, password: document.querySelector('#new-password').value, role, camera_permissions, networks});
+    await api(editing ? '/api/admin/users/access' : '/api/admin/users', {username, password, roles, camera_permissions, networks});
     clearUserForm();
     await setupAdmin();
     show(editing ? 'Account access updated.' : 'Account created.');
-  } catch (error) { show(error.message); }
+  } catch (error) { showError(error.message); }
 };
 
 function clearUserForm() {
@@ -649,8 +767,10 @@ function clearUserForm() {
   document.querySelector('#new-username').disabled = false;
   document.querySelector('#new-password').value = '';
   document.querySelector('#new-password').disabled = false;
-  document.querySelector('#new-role').value = 'viewer';
-  document.querySelector('#new-cameras').value = '';
+  document.querySelector('#new-password').required = true;
+  setSelectedRoles(['viewer']);
+  document.querySelector('#new-view-cameras').value = '';
+  document.querySelector('#new-control-cameras').value = '';
   document.querySelector('#new-networks').value = '';
   document.querySelector('#create-user').textContent = 'Create account';
   document.querySelector('#cancel-edit').hidden = true;
@@ -658,10 +778,13 @@ function clearUserForm() {
 
 document.querySelector('#cancel-edit').onclick = clearUserForm;
 document.querySelector('#add-network').onclick = async () => {
-  const cidr = document.querySelector('#new-network').value.trim();
-  try { await api('/api/admin/networks/add', {cidr}); document.querySelector('#new-network').value = ''; await setupAdmin(); show(`Added ${cidr} to the viewer allowlist.`); }
-  catch (error) { show(error.message); }
+  const cidrs = parseList(document.querySelector('#new-network').value);
+  if (!cidrs.length) { showError('Enter one or more IP addresses or CIDRs.'); return; }
+  try { await api('/api/admin/networks/add', {cidrs}); document.querySelector('#new-network').value = ''; await setupAdmin(); show(`Added ${cidrs.length} network${cidrs.length === 1 ? '' : 's'} to the viewer allowlist.`); }
+  catch (error) { showError(error.message); }
 };
+
+document.querySelector('#notice-close').onclick = () => { toast.hidden = true; };
 
 menuToggle.onclick = () => {
   navMenu.hidden = !navMenu.hidden;
@@ -698,7 +821,7 @@ document.addEventListener('keydown', event => {
     await Promise.all(inventory.map(loadCamera));
     show(`${inventory.length} configured camera${inventory.length === 1 ? '' : 's'} loaded. FPS is measured from the live source.`);
     window.setInterval(() => { for (const camera of cameras.values()) syncRecording(camera); }, 2000);
-  } catch (error) { show(error.message); }
+  } catch (error) { showError(error.message); }
 })();
 
 setupAdmin();

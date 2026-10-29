@@ -68,12 +68,16 @@ and media request; invalid attempts are rate limited. Disabling an account block
 next request. The service does not issue cookies or sessions.
 Do not send camera credentials to the browser or share one device password among users.
 
-The implemented roles are `web_admin`, `camera_admin` and `viewer`. A web
-administrator manages accounts, camera grants and allowed source addresses. A camera
+Accounts can combine the `web_admin`, `camera_admin` and `viewer` roles. A web
+administrator manages accounts and has access to every configured camera. A camera
 administrator can control assigned cameras; a viewer can only watch assigned cameras.
+Camera IDs accept configured names or an unambiguous numeric suffix, and `ALL` expands
+to the configured cameras. The UI can select every role currently exposed by the server.
 The initial web administrator is bootstrapped from the default camera login. The
 account database is mode 0600 under the service user's state directory. New account
-passwords require 12 characters.
+passwords require 12 to 256 characters. Account and source-network inputs are bounded
+and validated server-side; values remain data and are never interpolated into SQL or
+HTML. User-management errors return specific validation messages in the viewer.
 
 Maintain a global source-IP/CIDR allowlist with optional per-user restrictions.
 The operator maintains the initial private address inventory in ignored local

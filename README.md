@@ -50,9 +50,11 @@ without media requests. All viewers share the selected profile.
 
 The viewer now has independent configured camera workers, per-camera controls, bulk
 start/stop and quality actions, a saved browser preference to start Full HD streams,
-and local viewer accounts with camera grants and source-IP restrictions. The first
-web administrator uses the default camera login. When manual recording is enabled in
-the local config, camera administrators can start an FHD session. It saves separate
+and local viewer accounts with combined roles, camera grants and source-IP
+restrictions. Users can receive web-administrator and camera-administrator access
+together. The first web administrator uses the default camera login. When manual
+recording is enabled in the local config, camera administrators can start an FHD
+session. It saves separate
 clips of up to 15 minutes, stops after one hour by default, and allows a session-only
 custom cap of up to 12 hours. A bounded private spool stops recording when its quota or
 free-space reserve is reached. Continuous recording, automatic retention/delivery,

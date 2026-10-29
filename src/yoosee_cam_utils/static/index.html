@@ -55,25 +55,34 @@
     <section id="access-panel" class="settings-panel" role="tabpanel" aria-labelledby="access-tab">
       <h3>Allowed source networks</h3>
       <p class="help-text">Accounts can connect only from these networks. This list does not change the host firewall.</p>
-      <div class="form-actions"><label>Add IP or CIDR <input id="new-network" placeholder="192.0.2.10/32"></label><button id="add-network" type="button">Add network</button></div>
+      <div class="form-actions"><label>Add IPs or CIDRs <input id="new-network" placeholder="192.0.2.10/32, 192.0.2.11/32" maxlength="2048" spellcheck="false"></label><button id="add-network" type="button">Add networks</button></div>
       <div id="network-list" class="admin-list"></div>
     </section>
     <section id="users-panel" class="settings-panel" role="tabpanel" aria-labelledby="users-tab" hidden>
       <h3>Add account</h3>
       <div class="form-grid">
-        <label>Username <input id="new-username" autocomplete="off"></label>
-        <label>Password <input id="new-password" type="password" autocomplete="new-password" minlength="12"></label>
-        <label>Role <select id="new-role"><option value="viewer">Viewer</option><option value="camera_admin">Camera administrator</option><option value="web_admin">Web administrator</option></select></label>
-        <label>Camera IDs <input id="new-cameras" placeholder="cam01,cam02"></label>
-        <label>Allowed IPs/CIDRs <input id="new-networks" placeholder="192.0.2.10/32"></label>
+        <label>Username <input id="new-username" autocomplete="off" maxlength="64" spellcheck="false"></label>
+        <label>Password <input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+        <fieldset class="role-picker">
+          <legend>Roles</legend>
+          <label class="role-all"><input id="role-all" type="checkbox"> All roles</label>
+          <div id="role-options" class="role-options"></div>
+        </fieldset>
+        <label>View-only camera IDs <input id="new-view-cameras" placeholder="cam01, 02 or ALL" maxlength="512" spellcheck="false"></label>
+        <label>Control camera IDs <input id="new-control-cameras" placeholder="cam01, 02 or ALL" maxlength="512" spellcheck="false"></label>
+        <label>Allowed source IPs/CIDRs <input id="new-networks" placeholder="192.0.2.10/32, 192.0.2.11/32" maxlength="2048" spellcheck="false"></label>
       </div>
       <div class="form-actions"><button id="create-user" class="button-primary" type="button">Create account</button><button id="cancel-edit" type="button" hidden>Cancel edit</button></div>
-      <p class="help-text">Passwords need at least 12 characters. Web administrators manage accounts and source networks. Camera administrators control assigned cameras. Viewers can watch and download clips.</p>
+      <p class="help-text">Roles can be combined. Web administrators manage accounts and have access to every camera; camera administrators control assigned cameras; viewers can watch assigned cameras. Separate IDs and source networks with commas, semicolons or spaces. Use ALL for every configured camera. Numeric suffixes such as 02 resolve to cam02. Passwords need 12 to 256 characters.</p>
       <h3 class="users-heading">Users</h3>
       <div id="user-list" class="admin-list"></div>
     </section>
   </section>
 </main>
+<div id="notice-toast" class="notice-toast" role="alert" aria-live="assertive" hidden>
+  <p id="notice-message"></p>
+  <button id="notice-close" type="button" aria-label="Dismiss message">×</button>
+</div>
 <script src="/vendor/hls.min.js"></script>
 <script src="/app.js"></script>
 </html>
