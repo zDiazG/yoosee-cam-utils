@@ -78,7 +78,8 @@ Do not send camera credentials to the browser or share one device password among
 
 Accounts can combine the `web_admin`, `camera_admin` and `viewer` roles. A web
 administrator manages accounts and has access to every configured camera. A camera
-administrator can control assigned cameras; a viewer can only watch assigned cameras.
+administrator can control assigned cameras; viewers can watch and record clips on
+assigned cameras but cannot use PTZ or alter camera stream settings.
 Camera IDs accept configured names or an unambiguous numeric suffix, and `ALL` expands
 to the configured cameras. The compact multi-select dropdown shows ALL when every
 server-exposed role is selected.
@@ -107,8 +108,9 @@ Inspect existing private ingress before selecting a tunnel route or hostname.
 
 Keep vanilla HTML/CSS/JS with local hls.js. Use compact independent camera cards,
 clear active quality, per-camera errors and an in-card PTZ toggle with a centered
-direction pad and short movement slider. A left menu switches Home and Settings;
-Security / Access contains separate Access and Users tabs. Show source FPS and HLS
+direction pad and short movement slider. A left menu switches Home and Settings, with
+a separate Media page for clip playback and management. Security / Access contains
+separate Access and Users tabs. Show source FPS and HLS
 player delay separately. Preserve keyboard/focus access and avoid a Node server solely
 for styling. Browser state changes must ignore stale responses and release superseded
 HLS players/timers.
@@ -138,7 +140,8 @@ changes or an HD/FHD 30/60 option before device evidence exists.
 
 Continuous recording must be independent of viewers, selected quality and login
 sessions. The current slice only captures user-requested FHD clips. It opens a separate
-RTSP session and copies video/audio into a Matroska file without transcoding. Before
+RTSP session and copies video/audio into a browser-compatible MP4 file without
+transcoding. Before
 adding a continuous lightweight stream, prove simultaneous main/substream sessions
 and the camera's session limits.
 A gateway relay or shared ingest is justified only when measured session limits or
@@ -153,17 +156,25 @@ Schedules survive restart and define timezone/missed-run behavior. External dete
 adapters are planned; object detection itself is not part of the first recording slice.
 A later local motion adapter needs explicit CPU and false-positive acceptance.
 
-Manual FHD recording writes to a private spool, verifies each segment with ffprobe,
-computes SHA-256 and stores metadata beside the file. The configurable spool defaults
-to 2 GiB with a 5 GiB filesystem free-space reserve; sample config defaults recording
-off. Startup removes incomplete temporary output and orphaned media. One recording
-session is allowed at a time. Each session is split into clips no longer than 15
+Manual FHD recording writes to a private spool, copies video into MP4 without
+transcoding, verifies each segment with ffprobe, computes SHA-256 and stores metadata
+beside the file. Metadata includes the owner, stable sequence, camera ID, UTC times,
+backend ID, replication state and a safe display filename with camera, weekday,
+timestamp, sequence and resolution. The configurable spool defaults to 2 GiB with a
+5 GiB filesystem free-space reserve; sample config defaults recording off. Startup
+removes incomplete temporary output and orphaned media. Sessions are isolated by user
+and camera, with one active session per user/camera and a configurable global
+concurrency cap. Each session is split into clips no longer than 15
 minutes; the default automatic stop is one hour. A per-session custom cap is accepted
 up to 12 hours and is not saved in server config. The quota and free-space reserve can
-stop a session early. Camera administrators can stop sessions and delete saved clips;
-the service has no automatic retention policy. The UI provides authenticated
-downloads. Continuous recording and its oldest-first disposable ring remain future
-work.
+stop a session early. Owners can stop their sessions and delete their clips. Camera
+administrators can hide or delete clips for cameras they administer; web administrators
+can do so globally. The Media page uses browser playback and HTTP range reads rather
+than server-side playback transcoding. Per-camera recent lists cover the previous
+24 hours and cap at ten clips. The current filesystem spool is the only active store.
+Stable storage metadata prepares for a future verified Lumber replica, but no remote
+transfer is implemented. Continuous recording and its oldest-first disposable ring
+remain future work.
 
 Finalize files before enqueueing. SQLite journals queue transitions and recovery.
 A local disposable destination can exercise delivery while real storage is unavailable.
@@ -192,12 +203,13 @@ removes disposable test media after evidence is collected.
 4. Startup and frontend: the browser can save local Full HD autostart. Acceptance still
    needs restart behavior, partial bulk failures and live-lag observation with multiple
    players.
-5. Local recording: FHD sessions can be started/stopped, split into 15-minute clips,
-   downloaded and deleted from a camera tile, within configured spool/free-space limits
-   and with verified metadata. Automated tests cover session limits, permissions and
-   quota behavior. A real 2.9-second stop produced a 1920×1080/15 fps clip; its
-   downloaded SHA-256 matched metadata and the clip was deleted. Continuous ring,
-   schedule/event triggers and session resume after restart remain future work.
+5. Local recording: users can record clips under their own account; the browser plays
+   them with byte-range requests. Per-user/camera session isolation, bounded
+   concurrency, metadata, hidden-clip authorization and local spool limits have
+   automated coverage. A real 2.9-second clip was previously captured and its SHA-256
+   matched metadata. Real browser playback of this new MP4 path and simultaneous
+   recordings still need runtime acceptance. Continuous ring, schedule/event triggers,
+   retention and Lumber delivery remain future work.
 6. Real storage delivery: verify identity, permissions, interruption/resume, promotion
    and acknowledgement with the storage owner after that destination is ready.
 

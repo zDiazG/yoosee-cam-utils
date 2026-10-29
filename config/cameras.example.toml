@@ -27,3 +27,4 @@ max_bytes = 2147483648
 reserve_bytes = 5368709120
 segment_seconds = 900
 default_session_seconds = 3600
+max_concurrent_sessions = 4

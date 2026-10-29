@@ -27,9 +27,11 @@ class ClipManager:
         self.reserve_bytes = int(config.get("reserve_bytes", 5 * 1024**3))
         self.segment_seconds = int(config.get("segment_seconds", MAX_SEGMENT_SECONDS))
         self.default_session_seconds = int(config.get("default_session_seconds", DEFAULT_SESSION_SECONDS))
+        self.max_concurrent_sessions = int(config.get("max_concurrent_sessions", 4))
         if (self.max_bytes < 1024**2 or self.reserve_bytes < 0 or
                 not 1 <= self.segment_seconds <= MAX_SEGMENT_SECONDS or
-                not 1 <= self.default_session_seconds <= 60 * 60):
+                not 1 <= self.default_session_seconds <= 60 * 60 or
+                not 1 <= self.max_concurrent_sessions <= 16):
             raise ValueError("invalid recording limits")
         if self.enabled:
             if self.directory.is_symlink():
@@ -38,17 +40,20 @@ class ClipManager:
             self.directory.chmod(0o700)
         self.lock = threading.RLock()
         self.sessions = {}
-        self.active = None
+        self.sequence_file = self.directory / ".clip-sequence"
+        self.sequence = 0
+        if self.enabled:
+            self._load_sequence()
         self.closed = False
         if self.enabled:
             self._recover_spool()
 
     def _recover_spool(self):
-        for pattern in ("*.part.mkv", "*.json.part", "*.log"):
+        for pattern in ("*.part.mkv", "*.part.mp4", "*.json.part", "*.log"):
             for path in self.directory.rglob(pattern):
                 if path.is_file() and not path.is_symlink():
                     path.unlink()
-        for path in self.directory.rglob("*.mkv"):
+        for path in (*self.directory.rglob("*.mkv"), *self.directory.rglob("*.mp4")):
             if path.is_symlink() or not path.is_file():
                 continue
             metadata = path.with_suffix(".json")
@@ -95,7 +100,42 @@ class ClipManager:
             path.chmod(0o700)
         return output_dir
 
-    def start(self, camera_id, profile, max_seconds=None):
+    def _load_sequence(self):
+        if self.sequence_file.is_symlink():
+            raise ValueError("clip sequence file must not be a symlink")
+        try:
+            self.sequence = int(self.sequence_file.read_text().strip())
+        except FileNotFoundError:
+            self.sequence = 0
+        except OSError as error:
+            raise ValueError("clip sequence file cannot be read") from error
+        if self.sequence < 0:
+            raise ValueError("clip sequence file is invalid")
+        for metadata in self.directory.rglob("*.json"):
+            if metadata.is_symlink() or not metadata.is_file():
+                continue
+            try:
+                self.sequence = max(self.sequence, int(json.loads(metadata.read_text()).get("sequence", 0)))
+            except (OSError, ValueError, TypeError):
+                continue
+        self._save_sequence()
+
+    def _save_sequence(self):
+        temporary = self.sequence_file.with_suffix(".part")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            stream.write(f"{self.sequence}\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, self.sequence_file)
+        directory_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+
+    def start(self, camera_id, profile, max_seconds=None, owner="admin"):
         if not self.enabled:
             raise ValueError("local recording is disabled")
         if camera_id not in self.cameras.workers:
@@ -106,11 +146,16 @@ class ClipManager:
             raise ValueError(f"session limit must be 1..{MAX_SESSION_SECONDS} seconds")
         if not isinstance(profile, str) or not profile or len(profile) > 100:
             raise ValueError("invalid stream profile")
+        if not isinstance(owner, str) or not owner or len(owner) > 64:
+            raise ValueError("invalid recording owner")
         with self.lock:
             if self.closed:
                 raise ValueError("recording service is shutting down")
-            if self.active:
-                raise ValueError("another camera is already recording")
+            active = [item for item in self.sessions.values() if item["state"] == "recording"]
+            if any(item["camera_id"] == camera_id and item["owner"] == owner for item in active):
+                raise ValueError("you already have an active recording for this camera")
+            if len(active) >= self.max_concurrent_sessions:
+                raise ValueError("the recording concurrency limit has been reached")
             if self._budget() < 1024**2:
                 raise ValueError("recording quota or free-space reserve reached")
             camera = self.cameras.cameras[camera_id]
@@ -123,6 +168,7 @@ class ClipManager:
             session_id = uuid.uuid4().hex
             session = {
                 "id": session_id, "camera_id": camera_id, "profile": profile,
+                "owner": owner,
                 "state": "recording", "started_at": datetime.now(timezone.utc).isoformat(),
                 "max_seconds": max_seconds, "segment_count": 0, "segments": [],
                 "captured_seconds": 0,
@@ -130,18 +176,21 @@ class ClipManager:
                 "process": None, "current_part": None, "thread": None,
             }
             self.sessions[session_id] = session
-            self.active = session_id
             thread = threading.Thread(target=self._record_session, args=(session, camera, uri), daemon=True)
             session["thread"] = thread
             thread.start()
             return self._public_session(session)
 
-    def stop(self, camera_id, session_id=None):
+    def stop(self, camera_id, session_id=None, owner=None):
         with self.lock:
-            session_id = session_id or self.active
-            session = self.sessions.get(session_id) if session_id else None
-            if session is None or session["camera_id"] != camera_id:
+            session = self.sessions.get(session_id) if session_id else next((
+                item for item in reversed(tuple(self.sessions.values()))
+                if item["camera_id"] == camera_id and item["state"] == "recording"
+                and (owner is None or item["owner"] == owner)
+            ), None)
+            if session is None or session["camera_id"] != camera_id or (owner is not None and session["owner"] != owner):
                 raise KeyError("no active recording session for this camera")
+            session_id = session["id"]
             if session["state"] != "recording":
                 return self._public_session(session)
             session["stop_reason"] = "Stopped by user"
@@ -151,12 +200,13 @@ class ClipManager:
             process.send_signal(signal.SIGINT)
         return self.status(camera_id, session_id)
 
-    def status(self, camera_id, session_id=None):
+    def status(self, camera_id, session_id=None, owner=None):
         with self.lock:
-            if session_id is None:
-                session_id = self.active
-            session = self.sessions.get(session_id) if session_id else None
-            if session is None or session["camera_id"] != camera_id:
+            session = self.sessions.get(session_id) if session_id else next((
+                item for item in reversed(tuple(self.sessions.values()))
+                if item["camera_id"] == camera_id and (owner is None or item["owner"] == owner)
+            ), None)
+            if session is None or session["camera_id"] != camera_id or (owner is not None and session["owner"] != owner):
                 return {"state": "idle", "camera_id": camera_id}
             return self._public_session(session)
 
@@ -226,11 +276,21 @@ class ClipManager:
             raise ValueError("segment exceeded its spool allocation")
         with part.open("rb") as stream:
             os.fsync(stream.fileno())
-        final = part.with_name(f"{clip_id}.mkv")
+        final = part.with_name(f"{clip_id}.mp4")
         metadata_path = part.with_name(f"{clip_id}.json")
         digest = self._hash_file(part)
+        with self.lock:
+            self.sequence += 1
+            sequence = self.sequence
+            self._save_sequence()
+        local_started = datetime.fromisoformat(started_at.replace("Z", "+00:00")).astimezone()
+        quality = "FHD" if probe["width"] >= 1920 else "HD" if probe["width"] >= 1280 else "SD"
+        display_name = f"{session['camera_id']}_{local_started:%a_%Y%m%d_%H%M%S}_{sequence:06d}_{quality}"
         metadata = {
             "id": clip_id, "camera_id": session["camera_id"], "session_id": session["id"],
+            "sequence": sequence, "owner": session["owner"], "storage_backend": "local",
+            "storage_key": str(final.relative_to(self.directory)),
+            "replication_state": "local_only", "display_name": display_name,
             "segment_index": index, "trigger": "manual", "started_at": started_at,
             "ended_at": datetime.now(timezone.utc).isoformat(), "profile": session["profile"],
             "session_limit_seconds": session["max_seconds"], **probe,
@@ -242,7 +302,7 @@ class ClipManager:
         except Exception:
             final.unlink(missing_ok=True)
             raise
-        summary = {key: metadata[key] for key in ("id", "segment_index", "started_at", "duration_seconds", "width", "height", "fps", "bytes", "sha256")}
+        summary = {key: metadata[key] for key in ("id", "sequence", "owner", "segment_index", "started_at", "duration_seconds", "width", "height", "fps", "bytes", "sha256")}
         session["segments"].append(summary)
         session["segment_count"] = len(session["segments"])
         return probe
@@ -256,7 +316,9 @@ class ClipManager:
                 if remaining <= 0:
                     session["stop_reason"] = "Session time limit reached"
                     break
-                budget = self._budget()
+                with self.lock:
+                    concurrent = sum(item["state"] == "recording" for item in self.sessions.values())
+                budget = self._budget() // max(1, concurrent)
                 if budget < 1024**2:
                     session["stop_reason"] = "Recording quota or free-space reserve reached"
                     break
@@ -264,7 +326,7 @@ class ClipManager:
                 segment_index = session["segment_count"] + 1
                 clip_id = uuid.uuid4().hex
                 output_dir = self._output_dir(session["camera_id"])
-                part = output_dir / f"{clip_id}.part.mkv"
+                part = output_dir / f"{clip_id}.part.mp4"
                 log_path = output_dir / f"{clip_id}.log"
                 session["current_part"] = part
                 segment_started = datetime.now(timezone.utc).isoformat()
@@ -273,7 +335,7 @@ class ClipManager:
                         "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "pipe,file,rtsp,tcp,udp,rtp",
                         "-f", "concat", "-safe", "0", "-i", "pipe:0", "-t", str(segment_seconds),
                         "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-fs", str(budget),
-                        "-f", "matroska", "-n", str(part),
+                    "-movflags", "+faststart", "-f", "mp4", "-n", str(part),
                     ]
                     process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log)
                     with self.lock:
@@ -336,10 +398,7 @@ class ClipManager:
             with self.lock:
                 session["process"] = None
                 session["current_part"] = None
-                if self.active == session["id"]:
-                    self.active = None
-
-    def list_clips(self, camera_id):
+    def list_clips(self, camera_id, include_hidden=False, hidden_only=False, since_seconds=None, limit=None):
         if camera_id not in self.cameras.cameras:
             raise KeyError("unknown camera")
         result = []
@@ -351,17 +410,27 @@ class ClipManager:
                 continue
             try:
                 item = json.loads(path.read_text())
-                if item.get("camera_id") == camera_id and self._clip_path(camera_id, item.get("id")) is not None:
+                if (item.get("camera_id") == camera_id
+                        and (include_hidden or not item.get("hidden_at"))
+                        and (not hidden_only or bool(item.get("hidden_at")))
+                        and self._clip_path(camera_id, item.get("id")) is not None):
+                    if since_seconds is not None:
+                        started = datetime.fromisoformat(item["started_at"].replace("Z", "+00:00"))
+                        if (datetime.now(timezone.utc) - started).total_seconds() > since_seconds:
+                            continue
                     result.append(item)
             except (OSError, ValueError, TypeError):
                 continue
-        return sorted(result, key=lambda item: item.get("started_at", ""), reverse=True)
+        result.sort(key=lambda item: item.get("started_at", ""), reverse=True)
+        return result[:limit] if limit else result
 
     def _clip_path(self, camera_id, clip_id):
         if camera_id not in self.cameras.cameras or not isinstance(clip_id, str) or len(clip_id) != 32 or any(ch not in "0123456789abcdef" for ch in clip_id):
             return None
         camera_dir = self.directory / camera_id
-        for path in camera_dir.rglob(f"{clip_id}.mkv") if camera_dir.exists() else ():
+        for path in camera_dir.rglob(f"{clip_id}.*") if camera_dir.exists() else ():
+            if path.suffix not in (".mkv", ".mp4"):
+                continue
             if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(self.directory.resolve()):
                 return path
         return None
@@ -372,10 +441,21 @@ class ClipManager:
             raise KeyError("unknown clip")
         return path
 
+    def clip_metadata(self, camera_id, clip_id):
+        path = self._clip_path(camera_id, clip_id)
+        if path is None:
+            raise KeyError("unknown clip")
+        metadata = path.with_suffix(".json")
+        if metadata.is_symlink() or not metadata.is_file():
+            raise KeyError("unknown clip")
+        try:
+            return json.loads(metadata.read_text())
+        except (OSError, ValueError) as error:
+            raise KeyError("unknown clip") from error
+
     def delete_clip(self, camera_id, clip_id):
         with self.lock:
-            session = self.sessions.get(self.active) if self.active else None
-            if session and session["camera_id"] == camera_id and any(item["id"] == clip_id for item in session["segments"]):
+            if any(session["state"] == "recording" and session["camera_id"] == camera_id and any(item["id"] == clip_id for item in session["segments"]) for session in self.sessions.values()):
                 raise ValueError("cannot delete a clip from an active recording session")
             path = self._clip_path(camera_id, clip_id)
             if path is None:
@@ -385,19 +465,36 @@ class ClipManager:
             if metadata.is_file() and not metadata.is_symlink():
                 metadata.unlink()
 
+    def set_hidden(self, camera_id, clip_id, hidden, username):
+        with self.lock:
+            path = self._clip_path(camera_id, clip_id)
+            if path is None:
+                raise KeyError("unknown clip")
+            metadata_path = path.with_suffix(".json")
+            metadata = json.loads(metadata_path.read_text())
+            if hidden:
+                metadata["hidden_at"] = datetime.now(timezone.utc).isoformat()
+                metadata["hidden_by"] = username
+            else:
+                metadata.pop("hidden_at", None)
+                metadata.pop("hidden_by", None)
+            self._write_metadata(metadata_path, metadata)
+
     def stop_all(self):
         with self.lock:
             self.closed = True
-            session = self.sessions.get(self.active) if self.active else None
-            process = session.get("process") if session else None
-            thread = session.get("thread") if session else None
-            if session:
+            sessions = [session for session in self.sessions.values() if session["state"] == "recording"]
+            processes = [session.get("process") for session in sessions]
+            threads = [session.get("thread") for session in sessions]
+            for session in sessions:
                 session["stop_reason"] = "Service shutting down"
                 session["stop_event"].set()
-        if process and process.poll() is None:
-            process.send_signal(signal.SIGINT)
-        if thread and thread is not threading.current_thread():
-            thread.join(timeout=8)
+        for process in processes:
             if process and process.poll() is None:
-                process.kill()
-                thread.join(timeout=3)
+                process.send_signal(signal.SIGINT)
+        for thread, process in zip(threads, processes):
+            if thread and thread is not threading.current_thread():
+                thread.join(timeout=8)
+                if process and process.poll() is None:
+                    process.kill()
+                    thread.join(timeout=3)

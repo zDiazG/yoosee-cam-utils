@@ -119,7 +119,13 @@ class RecordingTests(unittest.TestCase):
             path = self.manager.clip_path("cam01", clip["id"])
             self.assertEqual(clip["sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-        self.assertFalse(list(self.manager.directory.rglob("*.part.mkv")))
+            self.assertEqual(path.suffix, ".mp4")
+            self.assertEqual(clip["owner"], "admin")
+            self.assertTrue(clip["sequence"])
+            self.assertEqual(clip["storage_backend"], "local")
+            self.assertEqual(clip["replication_state"], "local_only")
+            self.assertRegex(clip["display_name"], r"cam01_[A-Z][a-z]{2}_\d{8}_\d{6}_\d{6}_FHD")
+        self.assertFalse(list(self.manager.directory.rglob("*.part.mp4")))
 
     def test_stop_finalizes_the_current_segment_and_keeps_prior_segments(self):
         gate = threading.Event()
@@ -136,15 +142,21 @@ class RecordingTests(unittest.TestCase):
         self.assertEqual(result["segment_count"], 1)
         self.assertEqual(len(self.manager.list_clips("cam01")), 1)
 
-    def test_only_one_camera_session_can_run_at_a_time(self):
+    def test_sessions_are_scoped_to_user_and_camera_and_can_restart(self):
         gate = threading.Event()
         factory = lambda args, **kwargs: FakeProcess(args, gate=gate)
         with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=factory), patch.object(ClipManager, "_probe", side_effect=self.probe):
-            session = self.manager.start("cam01", "main", 60)
-            with self.assertRaisesRegex(ValueError, "another camera"):
-                self.manager.start("cam01", "sub", 60)
-            self.manager.stop("cam01", session["id"])
-            self.wait_for_session(session["id"])
+            alice = self.manager.start("cam01", "main", 60, owner="alice")
+            with self.assertRaisesRegex(ValueError, "already have an active recording"):
+                self.manager.start("cam01", "sub", 60, owner="alice")
+            bob = self.manager.start("cam01", "sub", 60, owner="bob")
+            self.manager.stop("cam01", alice["id"], owner="alice")
+            self.manager.stop("cam01", bob["id"], owner="bob")
+            self.wait_for_session(alice["id"])
+            self.wait_for_session(bob["id"])
+            restarted = self.manager.start("cam01", "main", 60, owner="alice")
+            self.manager.stop("cam01", restarted["id"], owner="alice")
+            self.wait_for_session(restarted["id"])
 
     def test_session_limit_is_capped_at_twelve_hours(self):
         self.assertEqual(MAX_SESSION_SECONDS, 12 * 60 * 60)
@@ -179,6 +191,18 @@ class RecordingTests(unittest.TestCase):
         self.assertFalse(path.exists())
         self.assertFalse(metadata.exists())
         self.assertEqual(len(self.manager.list_clips("cam01")), 0)
+
+    def test_hidden_clips_are_filtered_and_can_be_restored(self):
+        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=lambda args, **kwargs: FakeProcess(args)), patch.object(ClipManager, "_probe", side_effect=self.probe):
+            session = self.manager.start("cam01", "main", 2, owner="alice")
+            self.wait_for_session(session["id"])
+        clip = self.manager.list_clips("cam01")[0]
+        self.manager.set_hidden("cam01", clip["id"], True, "camadmin")
+        self.assertEqual(self.manager.list_clips("cam01"), [])
+        hidden = self.manager.list_clips("cam01", include_hidden=True, hidden_only=True)
+        self.assertEqual(hidden[0]["hidden_by"], "camadmin")
+        self.manager.set_hidden("cam01", clip["id"], False, "camadmin")
+        self.assertEqual(len(self.manager.list_clips("cam01")), 1)
 
     def test_startup_removes_incomplete_and_orphaned_media_but_keeps_valid_clips(self):
         folder = self.root / "recordings" / "cam01" / "2026" / "10"

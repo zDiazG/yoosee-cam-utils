@@ -4,6 +4,8 @@ const autostart = document.querySelector('#autostart');
 const menuToggle = document.querySelector('#menu-toggle');
 const navMenu = document.querySelector('#nav-menu');
 const navSettings = document.querySelector('.nav-settings');
+const mediaList = document.querySelector('#media-list');
+const mediaHiddenControl = document.querySelector('#hidden-clips-control');
 const toast = document.querySelector('#notice-toast');
 const toastMessage = document.querySelector('#notice-message');
 const cameras = new Map();
@@ -51,9 +53,12 @@ function closeNavigation() {
 }
 function showView(view) {
   const home = view === 'home';
+  const media = view === 'media';
   document.querySelector('#home-view').hidden = !home;
-  document.querySelector('#settings-view').hidden = home;
+  document.querySelector('#media-view').hidden = !media;
+  document.querySelector('#settings-view').hidden = home || media;
   closeNavigation();
+  if (media) loadMedia();
 }
 function showSecurityTab(tab) {
   const users = tab === 'users';
@@ -326,7 +331,7 @@ function renderCamera(item) {
 
   const recording = document.createElement('section');
   recording.className = 'recording-panel';
-  recording.hidden = !item.can_control;
+  recording.hidden = !item.can_record;
   const recordingHeading = document.createElement('div');
   recordingHeading.className = 'recording-heading';
   const recordingTitle = document.createElement('strong');
@@ -359,7 +364,7 @@ function renderCamera(item) {
   record.type = 'button';
   record.textContent = 'Start recording';
   record.className = 'button-record';
-  record.disabled = !item.can_control;
+  record.disabled = !item.can_record;
   recordingActions.append(limitLabel, customLabel, record);
   const recordingInfo = document.createElement('p');
   recordingInfo.className = 'recording-info';
@@ -541,7 +546,7 @@ function formatTime(total) {
 }
 
 async function syncRecording(camera) {
-  if (!camera.can_control) return;
+  if (!camera.can_record) return;
   try {
     const suffix = camera.sessionId ? `?session_id=${encodeURIComponent(camera.sessionId)}` : '';
     const session = await api(cameraPath(camera.id, 'recording') + suffix);
@@ -608,22 +613,23 @@ async function stopRecording(camera) {
 }
 
 async function loadClips(camera) {
-  const clips = await api(cameraPath(camera.id, 'clips'));
+  const clips = await api(cameraPath(camera.id, 'clips') + '?recent=1');
   camera.clips.replaceChildren();
-  camera.savedHeading.textContent = `Saved clips · ${clips.length}`;
+  camera.savedHeading.textContent = `Recent clips · 24 hours · ${clips.length}`;
   for (const clip of clips) {
     const row = document.createElement('div');
     row.className = 'clip-row';
     const info = document.createElement('div');
     const link = document.createElement('a');
     link.href = `/recordings/${encodeURIComponent(camera.id)}/${encodeURIComponent(clip.id)}`;
-    link.textContent = `${clip.width} × ${clip.height} · ${clip.fps} fps · ${new Date(clip.started_at).toLocaleString()}`;
-    link.download = `${clip.id}.mkv`;
+    link.textContent = clipLabel(clip);
+    link.target = '_blank';
+    link.rel = 'noopener';
     const detail = document.createElement('small');
-    detail.textContent = `${formatTime(clip.duration_seconds)} · ${(clip.bytes / 1024 / 1024).toFixed(1)} MiB · segment ${clip.segment_index || 1}`;
+    detail.textContent = `${formatTime(clip.duration_seconds)} · by ${clip.owner || 'unknown'}`;
     info.append(link, detail);
     row.append(info);
-    if (camera.can_control) {
+    if (clip.can_delete) {
       const remove = document.createElement('button');
       remove.textContent = 'Delete';
       remove.className = 'button-quiet';
@@ -644,6 +650,94 @@ async function loadClips(camera) {
       row.append(remove);
     }
     camera.clips.append(row);
+  }
+}
+
+function clipLabel(clip) {
+  const when = new Intl.DateTimeFormat(navigator.language, {
+    weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).format(new Date(clip.started_at));
+  const width = Number(clip.width) || 0;
+  const quality = width >= 1920 ? 'FHD' : width >= 1280 ? 'HD' : 'SD';
+  return `${clip.camera_id} · ${when} · #${String(clip.sequence || 0).padStart(6, '0')} · ${quality}`;
+}
+
+async function loadMedia() {
+  const hidden = document.querySelector('#show-hidden-clips').checked;
+  try {
+    const result = await api(`/api/media/clips${hidden ? '?hidden=1' : ''}`);
+    mediaHiddenControl.hidden = !result.can_view_hidden;
+    mediaList.replaceChildren();
+    if (!result.clips.length) {
+      const empty = document.createElement('p');
+      empty.className = 'media-empty';
+      empty.textContent = hidden ? 'No hidden clips.' : 'No saved clips yet.';
+      mediaList.append(empty);
+      return;
+    }
+    for (const clip of result.clips) {
+      const card = document.createElement('article');
+      card.className = 'media-card';
+      const heading = document.createElement('div');
+      heading.className = 'media-card-heading';
+      const title = document.createElement('strong');
+      title.textContent = clipLabel(clip);
+      const owner = document.createElement('span');
+      owner.className = 'media-owner';
+      owner.textContent = `by ${clip.owner || 'unknown'}`;
+      heading.append(title, owner);
+      const video = document.createElement('video');
+      video.controls = true;
+      video.preload = 'none';
+      video.playsInline = true;
+      video.src = `/recordings/${encodeURIComponent(clip.camera_id)}/${encodeURIComponent(clip.id)}`;
+      video.setAttribute('aria-label', clipLabel(clip));
+      const actions = document.createElement('div');
+      actions.className = 'media-actions';
+      const metadata = document.createElement('details');
+      metadata.className = 'media-metadata';
+      const summary = document.createElement('summary');
+      summary.textContent = 'Details';
+      const details = document.createElement('small');
+      const dimensions = `${clip.width || '?'}x${clip.height || '?'}`;
+      details.textContent = `${dimensions} · ${Number(clip.fps || 0).toFixed(1)} fps · ${formatTime(clip.duration_seconds)} · ${(Number(clip.bytes || 0) / 1024 / 1024).toFixed(1)} MiB · ${clip.storage_backend || 'local'}${clip.hidden_at ? ` · hidden by ${clip.hidden_by || 'admin'}` : ''}`;
+      metadata.append(summary, details);
+      actions.append(metadata);
+      if (clip.can_hide) {
+        const hide = document.createElement('button');
+        hide.type = 'button';
+        hide.textContent = clip.hidden_at ? 'Restore' : 'Hide';
+        hide.onclick = async () => {
+          try {
+            await api(`/api/media/clips/${encodeURIComponent(clip.camera_id)}/${encodeURIComponent(clip.id)}/${clip.hidden_at ? 'restore' : 'hide'}`, {});
+            await loadMedia();
+            show(clip.hidden_at ? 'Clip restored.' : 'Clip hidden from viewers.');
+          } catch (error) { showError(error.message); }
+        };
+        actions.append(hide);
+      }
+      if (clip.can_delete) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'button-quiet';
+        remove.textContent = 'Delete';
+        remove.onclick = async () => {
+          if (!window.confirm('Delete this clip permanently?')) return;
+          try {
+            await api(`/api/media/clips/${encodeURIComponent(clip.camera_id)}/${encodeURIComponent(clip.id)}/delete`, {});
+            await loadMedia();
+            show('Clip deleted.');
+          } catch (error) { showError(error.message); }
+        };
+        actions.append(remove);
+      }
+      card.append(heading, video, actions);
+      mediaList.append(card);
+    }
+  } catch (error) {
+    mediaList.replaceChildren();
+    showError(error.message);
   }
 }
 
@@ -925,6 +1019,9 @@ menuToggle.onclick = () => {
   menuToggle.setAttribute('aria-label', navMenu.hidden ? 'Open navigation' : 'Close navigation');
 };
 document.querySelector('#nav-home').onclick = () => showView('home');
+document.querySelector('#media-button').onclick = () => showView('media');
+document.querySelector('#show-hidden-clips').onchange = loadMedia;
+document.querySelector('#media-refresh').onclick = loadMedia;
 document.querySelector('#nav-settings').onclick = () => { showView('settings'); showSecurityTab('access'); };
 document.querySelector('#nav-security').onclick = () => { showView('settings'); showSecurityTab('access'); };
 document.querySelector('#access-tab').onclick = () => showSecurityTab('access');
