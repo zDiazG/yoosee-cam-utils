@@ -195,21 +195,32 @@ class WebTests(unittest.TestCase):
     def test_camera_admin_can_control_only_assigned_camera(self):
         self.add_second_camera()
         self.server.clips = Mock()
-        self.server.clips.start.return_value = {"id":"a"*32,"state":"recording"}
+        self.server.clips.start.return_value = {"id":"a"*32,"state":"recording","max_seconds":3600}
+        self.server.clips.stop.return_value = {"id":"a"*32,"state":"stopped"}
         data={"username":"camadmin","password":"another-long-test-password","role":"camera_admin","camera_permissions":{"cam02":"camera_admin"},"networks":["127.0.0.0/8"]}
         with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}):
             pass
         with self.request("/api/cameras/cam02/ptz",authorized=True,data={"pan":0.25},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password") as response:
             self.assertTrue(json.load(response)["stop_confirmed"])
+        self.server.clips.status.return_value={"camera_id":"cam02","state":"idle"}
+        with self.request("/api/cameras/cam02/recording",authorized=True,username="camadmin",password="another-long-test-password") as response:
+            self.assertEqual(json.load(response)["state"],"idle")
+        self.server.clips.status.assert_called_once_with("cam02",None)
+        with self.request("/api/cameras/cam02/recording?session_id="+"b"*32,authorized=True,username="camadmin",password="another-long-test-password") as response:
+            self.assertEqual(json.load(response)["state"],"idle")
+        self.assertEqual(self.server.clips.status.call_args_list[-1].args,("cam02","b"*32))
         with self.assertRaises(urllib.error.HTTPError) as admin_error:
             self.request("/api/admin/users",authorized=True,username="camadmin",password="another-long-test-password")
         self.assertEqual(admin_error.exception.code,403)
         admin_error.exception.close()
-        with self.request("/api/cameras/cam02/clips",authorized=True,data={"profile":"profile-other","seconds":2},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password") as response:
+        with self.request("/api/cameras/cam02/recording/start",authorized=True,data={"profile":"profile-other","max_seconds":3600},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password") as response:
             self.assertEqual(response.status,202)
-        self.server.clips.start.assert_called_once_with("cam02","profile-other",2)
+        self.server.clips.start.assert_called_once_with("cam02","profile-other",3600)
+        with self.request("/api/cameras/cam02/recording/stop",authorized=True,data={"session_id":"a"*32},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password") as response:
+            self.assertEqual(json.load(response)["state"],"stopped")
+        self.server.clips.stop.assert_called_once_with("cam02","a"*32)
         with self.assertRaises(urllib.error.HTTPError) as record_error:
-            self.request("/api/cameras/cam01/clips",authorized=True,data={"profile":"profile0","seconds":2},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password")
+            self.request("/api/cameras/cam01/recording/start",authorized=True,data={"profile":"profile0","max_seconds":3600},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password")
         self.assertEqual(record_error.exception.code,403)
         record_error.exception.close()
         with self.request("/api/cameras",authorized=True,username="camadmin",password="another-long-test-password") as response:
@@ -252,10 +263,15 @@ class WebTests(unittest.TestCase):
             self.assertEqual(response.read(),b"private camera recording")
             self.assertEqual(response.headers["Content-Disposition"],f'attachment; filename="{clip_id}.mkv"')
         with self.assertRaises(urllib.error.HTTPError) as error:
-            self.request("/api/cameras/cam01/clips",authorized=True,data={"profile":"profile0","seconds":2},extra={"X-Camera-Client":"1"},username="clip-viewer",password="viewer-clip-password")
+            self.request("/api/cameras/cam01/recording/start",authorized=True,data={"profile":"profile0","max_seconds":3600},extra={"X-Camera-Client":"1"},username="clip-viewer",password="viewer-clip-password")
         self.assertEqual(error.exception.code,403)
         error.exception.close()
         self.server.clips.start.assert_not_called()
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/cameras/cam01/recording/stop",authorized=True,data={"session_id":"b"*32},extra={"X-Camera-Client":"1"},username="clip-viewer",password="viewer-clip-password")
+        self.assertEqual(error.exception.code,403)
+        error.exception.close()
+        self.server.clips.stop.assert_not_called()
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.request(f"/api/cameras/cam01/clips/{clip_id}/delete",authorized=True,data={},extra={"X-Camera-Client":"1"},username="clip-viewer",password="viewer-clip-password")
         self.assertEqual(error.exception.code,403)

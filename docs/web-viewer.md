@@ -59,21 +59,25 @@ This is a timed pulse, not a calibrated angle. Stream controls affect the shared
 worker for that camera, so all viewers of that camera see a profile change. Each
 worker stops after 120 seconds without media requests.
 
-## Manual clips
+## Recording sessions
 
-Manual clip capture is enabled only when `[recording].enabled = true` in the private
-operator config. A camera administrator can start an FHD clip from the camera tile;
-the default is 30 seconds and the maximum is 300. Capture opens a separate RTSP
-session and copies the source without re-encoding. The service permits one clip at a
-time, caps the spool at its configured byte limit, and preserves a configured free-
-space reserve. Startup removes incomplete temporary files and media without a valid
-sidecar. It verifies the clip with ffprobe and stores dimensions, measured FPS,
-duration, size and SHA-256 in a sidecar. The viewer provides authenticated downloads.
-Completed clips remain until a camera administrator deletes them from that camera's
-tile. There is no automatic retention policy, 24/7 ring, motion trigger, schedule or
-lumber delivery in this release. A second RTSP session may affect
-live viewing on cameras with a low session limit; validate that behavior before
-enabling continuous capture.
+Recording is enabled only when `[recording].enabled = true` in the private operator
+config. A camera administrator can start and stop an FHD session from the camera tile.
+The default auto-stop limit is one hour; presets include 15 and 30 minutes. A custom
+limit applies only to the current browser tab and is capped at 12 hours. The server
+validates that cap on every request. It saves separate clips no longer than 15
+minutes, using a new RTSP connection for each segment. The reconnect can create a
+short gap between clips. Stopping early finalizes the current segment. The spool has a
+configured byte limit and free-space reserve; when either is reached, the session
+stops with a status message.
+
+Each saved segment is verified with ffprobe and has a sidecar with dimensions,
+measured FPS, duration, size and SHA-256. Startup removes incomplete temporary files
+and media without a valid sidecar. The viewer provides authenticated downloads and
+camera administrators can delete clips from the camera tile. There is no automatic
+retention policy, 24/7 ring, motion trigger, schedule or lumber delivery in this
+release. A second RTSP session may affect live viewing on cameras with a low session
+limit; validate that behavior before enabling continuous capture.
 
 ## Current limitations
 

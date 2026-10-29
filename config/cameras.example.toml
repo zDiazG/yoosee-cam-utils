@@ -25,5 +25,5 @@ enabled = false
 spool_dir = "~/.local/state/yoosee-cam-utils/recordings"
 max_bytes = 2147483648
 reserve_bytes = 5368709120
-default_seconds = 30
-max_seconds = 300
+segment_seconds = 900
+default_session_seconds = 3600
