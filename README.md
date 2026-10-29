@@ -48,10 +48,11 @@ duration. Its HLS worker preserves
 the source video and converts audio to AAC for browsers. It stops after two minutes
 without media requests. All viewers share the selected profile.
 
-The viewer is a prototype. Lightweight playback works on the tested device; Full HD
-can take minutes to settle after startup. The web PTZ path now uses WS-Addressing; a
-bounded rightward move was physically confirmed, while other directions still need
-validation. Live RTSP probes of both profiles report 15 fps. ONVIF `GetProfiles` reports
+The viewer is a prototype. Lightweight playback works on the tested device; the live
+viewer targets roughly one four-second segment behind the stream. The web PTZ path
+uses the camera-compatible WS-Addressing XML; a bounded leftward browser click was
+physically confirmed, while other directions still need validation. Live RTSP probes
+of both profiles report 15 fps. ONVIF `GetProfiles` reports
 a 30 fps frame-rate limit for each profile, but the camera still emits 15 fps; 60 fps
 is not advertised.
 These capabilities are not regular-use acceptance yet.

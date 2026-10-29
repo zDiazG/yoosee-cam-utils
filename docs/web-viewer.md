@@ -33,22 +33,32 @@ Profiles are labeled using the resolutions advertised by the camera, which may
 differ from its mobile app's HD/FHD labels. Changing the profile replaces the current
 player and starts the selected stream; Start or retry is available if startup fails.
 
-HLS introduces several seconds of video delay. PTZ requests use the selected
-movement duration (0.2–1.0 seconds) and an explicit stop. This is a timed pulse,
-not a calibrated angle; do not repeatedly click while waiting for delayed video to
-catch up. The active quality and Stop Video action are shared by all viewers. A
-worker is stopped after 120 seconds without media requests.
+HLS playback targets one four-second segment behind the live edge. The page shows
+the player's measured delay from that edge. This does not include delay inside the
+camera's RTSP feed. If playback falls behind, hls.js may briefly increase playback
+speed up to 1.1×; if lag exceeds three target segments, it seeks back toward the live
+target. PTZ requests use the selected movement duration (0.2–1.0 seconds, default
+0.8) and an explicit stop. The server rejects values outside the slider range. The
+request sends an ONVIF duration such as `PT0.8S`.
+This is a timed pulse, not a calibrated angle. The active quality and Stop Video
+action are shared by all viewers. A worker is stopped after 120 seconds without
+media requests.
 
 ## Current limitations
 
-The lightweight profile works on the tested camera. Full HD takes several minutes to
-stabilize in the user's browser, but server-side HLS output remained continuous in a
-26-second sample; the browser delay's cause is not established. A bounded
-WS-Addressing PTZ request moved the camera right and the user confirmed it stopped.
-The web API now uses that request format, and its integrated movement call returned
-HTTP 200 with Stop confirmed. The user also observed a direct 0.8-second rightward
-pulse and its stop. The UI lets the operator adjust pulse duration from 0.2 to 1.0
-seconds. Other directions and playback continuity during movement remain unverified.
+The lightweight profile works on the tested camera. The HLS playlist has four-second
+segments because the copied camera stream provides keyframes at that interval. A
+headless browser measured 8.2 seconds of latency with the prior two-segment target,
+stable over 90 seconds. The deployed one-segment target measured 4.2–4.4 seconds over
+65 seconds, stable and without fatal playback errors. This measures player delay from
+the HLS edge, not camera-to-server delay. The page now displays this measurement so
+the two can be distinguished. A headless browser cannot confirm the perceived camera-
+to-screen delay on the user's device.
+
+The web PTZ uses the camera-compatible WS-Addressing SOAP serialization. A physical
+browser click moved the camera left and it stopped. The slider sends a duration from
+0.2 to 1.0 seconds in 0.1-second steps, defaulting to 0.8 seconds. Other directions
+and playback continuity during movement remain unverified.
 
 Live RTSP probes of both profiles report 15 fps: 1920×1080 for the main stream and
 640×360 for the substream. ONVIF `GetProfiles` reports a 30 fps frame-rate limit for

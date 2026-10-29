@@ -119,12 +119,32 @@ class CameraTests(unittest.TestCase):
         response.read.return_value = b"<ok/>"
         cam.opener.open = Mock(return_value=response)
 
-        cam.call("ptz", cli.PTZ, "ContinuousMove", "<m:ProfileToken/>", addressing=True)
+        cam.call(
+            "ptz",
+            cli.PTZ,
+            "ContinuousMove",
+            '<p:ProfileToken>profile0</p:ProfileToken><p:Timeout>PT0.8S</p:Timeout>',
+            addressing=True,
+            prefix="p",
+            extra_namespaces=f'xmlns:t="{cli.SCHEMA}"',
+        )
 
         request = cam.opener.open.call_args.args[0]
-        root = ET.fromstring(request.data)
+        body = request.data.decode()
+        self.assertIn(f'<p:ContinuousMove xmlns:p="{cli.PTZ}" xmlns:t="{cli.SCHEMA}">', body)
+        root = ET.fromstring(body)
         self.assertEqual(root.findtext(".//{http://schemas.xmlsoap.org/ws/2004/08/addressing}Action"), f"{cli.PTZ}/ContinuousMove")
         self.assertEqual(root.findtext(".//{http://schemas.xmlsoap.org/ws/2004/08/addressing}To"), "http://192.0.2.10:5000/onvif/ptz_service")
+        self.assertEqual(root.findtext(".//{http://www.onvif.org/ver20/ptz/wsdl}Timeout"), "PT0.8S")
+
+    def test_stop_uses_standard_soap_and_fallback(self):
+        cam = cli.Camera(self.c)
+        cam.call = Mock(side_effect=[OSError("unsupported"), ET.fromstring("<ok/>")])
+
+        cam.stop("profile0")
+
+        self.assertEqual([call.args[2] for call in cam.call.call_args_list], ["Stop", "ContinuousMove"])
+        self.assertTrue(all(not call.kwargs.get("addressing", False) for call in cam.call.call_args_list))
 
 
 if __name__ == "__main__":

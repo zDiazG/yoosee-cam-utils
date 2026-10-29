@@ -93,13 +93,16 @@ class Camera:
         self.last = 0.0
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    def call(self, service, namespace, operation, children="", addressing=False):
+    def call(self, service, namespace, operation, children="", addressing=False, prefix="m", extra_namespaces=""):
         time.sleep(max(0, 0.4 - (time.monotonic() - self.last)))
         path = self.c.get(f"{service}_path", f"/onvif/{service}_service")
         if not path.startswith("/") or "\n" in path or "\r" in path:
             raise ValueError("invalid service path")
         url = f'http://{self.c["host"]}:{self.c["onvif_port"]}{path}'
-        body = f'<m:{operation} xmlns:m="{namespace}">{children}</m:{operation}>'
+        declarations = f' xmlns:{prefix}="{namespace}"'
+        if extra_namespaces:
+            declarations += f" {extra_namespaces}"
+        body = f'<{prefix}:{operation}{declarations}>{children}</{prefix}:{operation}>'
         header = security(self.c["username"], self.c["password"])
         if addressing:
             wsa = "http://schemas.xmlsoap.org/ws/2004/08/addressing"

@@ -139,11 +139,11 @@ class Streams:
             if stop:
                 self.camera.stop(token)
             else:
-                if not (abs(pan) <= 0.5 and abs(tilt) <= 0.5 and 0 < duration <= 1):
+                if not (abs(pan) <= 0.5 and abs(tilt) <= 0.5 and 0.2 <= duration <= 1):
                     raise ValueError("PTZ limits exceeded")
                 try:
-                    body = f'<m:ProfileToken>{escape(token)}</m:ProfileToken><m:Velocity><t:PanTilt xmlns:t="{SCHEMA}" x="{pan}" y="{tilt}"/><t:Zoom xmlns:t="{SCHEMA}" x="0"/></m:Velocity><m:Timeout>PT{duration}S</m:Timeout>'
-                    self.camera.call("ptz", PTZ, "ContinuousMove", body, addressing=True)
+                    body = f'<p:ProfileToken>{escape(token)}</p:ProfileToken><p:Velocity><t:PanTilt x="{pan:g}" y="{tilt:g}"/><t:Zoom x="0"/></p:Velocity><p:Timeout>PT{duration:g}S</p:Timeout>'
+                    self.camera.call("ptz", PTZ, "ContinuousMove", body, addressing=True, prefix="p", extra_namespaces=f'xmlns:t="{SCHEMA}"')
                     time.sleep(duration)
                 finally:
                     self.camera.stop(token)

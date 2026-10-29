@@ -190,8 +190,11 @@ class WebTests(unittest.TestCase):
 
         operation, namespace, action, body = camera.call.call_args.args
         self.assertEqual((operation, action), ("ptz", "ContinuousMove"))
-        ET.fromstring(f'<root xmlns:m="{namespace}">{body}</root>')
+        ET.fromstring(f'<root xmlns:m="{namespace}" xmlns:p="{namespace}" xmlns:t="http://www.onvif.org/ver10/schema">{body}</root>')
         self.assertTrue(camera.call.call_args.kwargs["addressing"])
+        self.assertEqual(camera.call.call_args.kwargs["prefix"], "p")
+        self.assertIn('<p:Velocity><t:PanTilt x="0.25" y="0"/><t:Zoom x="0"/></p:Velocity>', body)
+        self.assertIn("<p:Timeout>PT0.2S</p:Timeout>", body)
         camera.stop.assert_called_once_with("profile0")
 
     def test_ptz_stops_when_addressed_move_fails(self):
@@ -204,6 +207,17 @@ class WebTests(unittest.TestCase):
             streams.ptz(pan=0.25, duration=0.2)
 
         camera.stop.assert_called_once_with("profile0")
+
+    def test_ptz_rejects_duration_outside_ui_range(self):
+        camera = Mock()
+        streams = Streams(camera, self.root / "ptz-duration-cache")
+        streams.profile = "profile0"
+
+        with self.assertRaisesRegex(ValueError, "PTZ limits exceeded"):
+            streams.ptz(pan=0.25, duration=0.1)
+
+        camera.call.assert_not_called()
+        camera.stop.assert_not_called()
 
 
 if __name__ == "__main__":
