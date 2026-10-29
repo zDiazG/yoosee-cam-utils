@@ -26,12 +26,27 @@ and reject cross-origin browser requests.
 ./scripts/yoosee-web --config config/local/cameras.toml
 ```
 
-Open `https://YOUR_SERVER:8780` and use the configured camera credentials at the
-browser's authentication prompt. Video starts
-muted because browsers restrict autoplay with sound; unmute in the video controls.
-Profiles are labeled using the resolutions advertised by the camera, which may
-differ from its mobile app's HD/FHD labels. Changing the profile replaces the current
-player and starts the selected stream; Start or retry is available if startup fails.
+Open `https://YOUR_SERVER:8780` and use the configured default camera credentials at
+the browser's authentication prompt on first run. That account bootstraps the first
+web administrator. The administrator can add web administrators, camera-scoped
+administrators and viewers, edit grants, set or reset passwords, restrict each user
+to source networks, disable accounts and manage the viewer's global source allowlist.
+Password hashes are stored in the private SQLite database configured by
+`auth_database`; new or reset passwords need 12 characters. The database file is
+created with mode 0600. A web administrator with no per-user network list can connect
+from any address in the global allowlist. A configured per-user list narrows access.
+Video starts muted because browsers restrict autoplay with sound; unmute in the video
+controls. Profiles are labeled using advertised resolutions, which may
+differ from the mobile app's HD/FHD labels. Each tile has its own profile and
+start/stop controls. Bulk actions start or stop all configured cameras, or switch all
+to Full HD when available or their lightest profile. The browser can save a preference
+to start Full HD streams when the page opens. An allowed source IP still needs a valid
+account. The application allowlist does not change the host firewall; update that
+separately when a new subnet must reach the service. The server checks the TCP peer
+address. Source NAT therefore makes several clients appear as their gateway and removes
+per-client IP isolation; preserve source addresses or use a separately trusted ingress
+before relying on per-user IP restrictions. Forwarded headers are not trusted.
+Default-route CIDRs are rejected.
 
 HLS playback targets one four-second segment behind the live edge. The page shows
 the player's measured delay from that edge. This does not include delay inside the
@@ -40,9 +55,9 @@ speed up to 1.1×; if lag exceeds three target segments, it seeks back toward th
 target. PTZ requests use the selected movement duration (0.2–1.0 seconds, default
 0.8) and an explicit stop. The server rejects values outside the slider range. The
 request sends an ONVIF duration such as `PT0.8S`.
-This is a timed pulse, not a calibrated angle. The active quality and Stop Video
-action are shared by all viewers. A worker is stopped after 120 seconds without
-media requests.
+This is a timed pulse, not a calibrated angle. Stream controls affect the shared
+worker for that camera, so all viewers of that camera see a profile change. Each
+worker stops after 120 seconds without media requests.
 
 ## Current limitations
 
@@ -73,8 +88,11 @@ change; the UI displays measured output FPS instead.
 The camera grid has independent configured workers, profile selectors and stream
 controls, with bulk start/stop and quality actions. The browser can save a local
 preference to start each camera at Full HD when available. This preference lives in
-that browser's local storage. A real second camera, separate application accounts,
-and per-camera authorization remain unverified or unimplemented.
+that browser's local storage. Account grants and source restrictions have unit
+coverage, but a real second camera remains untested. The source allowlist applies at
+the application; the host firewall remains a separate filter. Forwarded client-IP
+headers are ignored, so a tunnel or reverse proxy needs an explicit trusted-proxy
+design before it can preserve per-user source restrictions.
 All project text and UI strings must remain English.
 
 ## User service

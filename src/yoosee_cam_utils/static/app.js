@@ -3,8 +3,9 @@ const selectedCamera=document.querySelector('#selected-camera'), autostart=docum
 const ptzDuration=document.querySelector('#ptz-duration'), ptzDurationValue=document.querySelector('#ptz-duration-value');
 const cameras=new Map();
 let ptzBusy=false;
+let editingUser=null;
 const AUTO_KEY='yoosee.autostart-full-hd';
-async function api(path,data){const options=data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Camera-Client':'1'},body:JSON.stringify(data)};const r=await fetch(path,options);if(!r.ok)throw Error(`Request failed (${r.status}). Check the camera and try again.`);return r.json();}
+async function api(path,data){const options=data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Camera-Client':'1'},body:JSON.stringify(data)};const r=await fetch(path,options);if(!r.ok){const error=Error(`Request failed (${r.status}). Check the camera and try again.`);error.status=r.status;throw error;}return r.json();}
 function show(text){status.textContent=text;}
 function cameraPath(id,action){return `/api/cameras/${encodeURIComponent(id)}/${action}`;}
 function profileResolution(profile){const v=profile.VideoEncoderConfiguration||{};return {width:Number(v.Width)||0,height:Number(v.Height)||0};}
@@ -73,4 +74,35 @@ ptzDuration.value=localStorage.getItem('yoosee.ptz-duration')||'0.8';ptzDuration
 ptzDuration.oninput=()=>{ptzDurationValue.textContent=`${Number(ptzDuration.value).toFixed(1)} s`;localStorage.setItem('yoosee.ptz-duration',ptzDuration.value);};
 document.querySelectorAll('[data-pan]').forEach(button=>button.onclick=async()=>{if(ptzBusy)return;ptzBusy=true;const id=selectedCamera.value;show(`Sending PTZ command to ${cameras.get(id)?.name||id}...`);try{await api(cameraPath(id,'ptz'),{pan:Number(button.dataset.pan),tilt:Number(button.dataset.tilt),seconds:Number(ptzDuration.value)});show('PTZ movement command sent and stopped.');}catch(error){show(error.message);}finally{ptzBusy=false;}});
 document.querySelector('#ptz-stop').onclick=async()=>{if(ptzBusy)return;ptzBusy=true;const id=selectedCamera.value;try{await api(cameraPath(id,'ptz'),{stop:true});show('PTZ stop request accepted.');}catch(error){show(error.message);}finally{ptzBusy=false;}};
+(async function setupAdmin(){
+  const panel=document.querySelector('#admin-panel');
+  try{
+    const users=await api('/api/admin/users'),networks=await api('/api/admin/networks');panel.hidden=false;
+    const list=document.querySelector('#user-list');list.replaceChildren();
+    for(const user of users){
+      const item=document.createElement('div');item.className='admin-item';
+      const label=document.createElement('span');label.textContent=`${user.username} · ${user.role} · ${user.enabled?'enabled':'disabled'}`;
+      item.append(label);
+      const edit=document.createElement('button');edit.textContent='Edit access';edit.onclick=()=>{editingUser=user.username;document.querySelector('#new-username').value=user.username;document.querySelector('#new-username').disabled=true;document.querySelector('#new-role').value=user.role;document.querySelector('#new-cameras').value=Object.keys(user.cameras).join(',');document.querySelector('#new-networks').value=user.networks.join(',');document.querySelector('#new-password').disabled=false;document.querySelector('#create-user').textContent='Save access';document.querySelector('#cancel-edit').hidden=false;};item.append(edit);
+      const toggle=document.createElement('button');toggle.textContent=user.enabled?'Disable':'Enable';toggle.onclick=async()=>{try{await api(`/api/admin/users/${user.enabled?'disable':'enable'}`,{username:user.username});await setupAdmin();show(`${user.enabled?'Disabled':'Enabled'} ${user.username}.`);}catch(error){show(error.message);}};item.append(toggle);
+      list.append(item);
+    }
+    const networkList=document.querySelector('#network-list');networkList.replaceChildren();networkList.className='admin-list';
+    for(const cidr of networks){const item=document.createElement('div');item.className='admin-item';const label=document.createElement('span');label.textContent=cidr;const button=document.createElement('button');button.textContent='Remove';button.onclick=async()=>{try{await api('/api/admin/networks/remove',{cidr});await setupAdmin();show(`Removed ${cidr} from the viewer allowlist.`);}catch(error){show(error.message);}};item.append(label,button);networkList.append(item);}
+  }catch(error){if(error.status!==403)show(error.message);}
+})();
+document.querySelector('#create-user').onclick=async()=>{
+  const role=document.querySelector('#new-role').value;
+  const cameras=document.querySelector('#new-cameras').value.split(',').map(value=>value.trim()).filter(Boolean);
+  const networks=document.querySelector('#new-networks').value.split(',').map(value=>value.trim()).filter(Boolean);
+  const permission=role==='camera_admin'?'camera_admin':'viewer';
+  const camera_permissions=role==='web_admin'?{}:Object.fromEntries(cameras.map(id=>[id,permission]));
+  const username=editingUser||document.querySelector('#new-username').value.trim();
+  const editing=Boolean(editingUser);
+  try{await api(editing?'/api/admin/users/access':'/api/admin/users',{username,password:document.querySelector('#new-password').value,role,camera_permissions,networks});clearUserForm();await setupAdmin();show(editing?'Account access updated.':'Account created.');}
+  catch(error){show(error.message);}
+};
+function clearUserForm(){editingUser=null;document.querySelector('#new-username').value='';document.querySelector('#new-username').disabled=false;document.querySelector('#new-password').value='';document.querySelector('#new-password').disabled=false;document.querySelector('#new-role').value='viewer';document.querySelector('#new-cameras').value='';document.querySelector('#new-networks').value='';document.querySelector('#create-user').textContent='Create account';document.querySelector('#cancel-edit').hidden=true;}
+document.querySelector('#cancel-edit').onclick=clearUserForm;
+document.querySelector('#add-network').onclick=async()=>{const cidr=document.querySelector('#new-network').value.trim();try{await api('/api/admin/networks/add',{cidr});document.querySelector('#new-network').value='';await setupAdmin();show(`Added ${cidr} to the viewer allowlist.`);}catch(error){show(error.message);}};
 (async()=>{try{const inventory=await api('/api/cameras');if(!inventory.length){show('No cameras are configured.');return;}for(const item of inventory)renderCamera(item);await Promise.all(inventory.map(loadCamera));show(`${inventory.length} configured camera${inventory.length===1?'':'s'} loaded. Source FPS is measured per active stream.`);}catch(error){show(error.message);}})();
