@@ -63,11 +63,15 @@
       <div class="form-grid">
         <label>Username <input id="new-username" autocomplete="off" maxlength="64" spellcheck="false"></label>
         <label>Password <input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
-        <fieldset class="role-picker">
-          <legend>Roles</legend>
-          <label class="role-all"><input id="role-all" type="checkbox"> All roles</label>
-          <div id="role-options" class="role-options"></div>
-        </fieldset>
+        <div class="role-field"><span>Roles</span>
+          <details id="role-select" class="role-select">
+            <summary id="role-summary">Select roles</summary>
+            <div class="role-menu">
+              <label class="role-all"><input id="role-all" type="checkbox"> ALL</label>
+              <div id="role-options" class="role-options"></div>
+            </div>
+          </details>
+        </div>
         <label>View-only camera IDs <input id="new-view-cameras" placeholder="cam01, 02 or ALL" maxlength="512" spellcheck="false"></label>
         <label>Control camera IDs <input id="new-control-cameras" placeholder="cam01, 02 or ALL" maxlength="512" spellcheck="false"></label>
         <label>Allowed source IPs/CIDRs <input id="new-networks" placeholder="192.0.2.10/32, 192.0.2.11/32" maxlength="2048" spellcheck="false"></label>

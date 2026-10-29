@@ -110,11 +110,18 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 12px; }
 .form-grid > label { display: grid; align-items: start; gap: 4px; color: #cbd6dc; font-size: .86rem; }
 .form-grid input, .form-grid select { width: 100%; }
-.role-picker { grid-column: 1 / -1; min-width: 0; margin: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; }
-.role-picker legend { padding: 0 4px; color: #cbd6dc; font-size: .86rem; }
-.role-options { display: flex; flex-wrap: wrap; gap: 7px 14px; }
-.role-options label, .role-all { display: inline-flex; align-items: center; gap: 6px; color: #d2dce1; font-size: .82rem; }
-.role-all { margin-bottom: 7px; font-weight: 650; }
+.role-field { min-width: 0; display: grid; gap: 4px; align-content: start; color: #cbd6dc; font-size: .86rem; }
+.role-select { position: relative; }
+.role-select summary { display: flex; justify-content: space-between; align-items: center; min-height: 38px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-raised); cursor: pointer; list-style: none; }
+.role-select summary::-webkit-details-marker { display: none; }
+.role-select summary::after { content: '▾'; margin-left: 10px; color: var(--muted); }
+.role-select[open] summary { outline: 1px solid var(--accent); }
+.role-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 12; min-width: 100%; width: max-content; max-width: 300px; padding: 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); box-shadow: 0 8px 22px #0006; }
+.role-options { display: grid; }
+.role-options label, .role-all { display: flex; align-items: center; gap: 8px; padding: 6px; color: #d2dce1; font-size: .82rem; white-space: nowrap; cursor: pointer; }
+.role-options label:hover, .role-all:hover { background: var(--surface); }
+.role-options input, .role-all input { flex: 0 0 17px; width: 17px; }
+.role-all { border-bottom: 1px solid var(--border); margin-bottom: 3px; font-weight: 650; }
 .form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .form-actions > label { display: flex; flex: 1 1 260px; align-items: center; gap: 8px; color: #cbd6dc; font-size: .86rem; }
 .form-actions > label input { flex: 1; min-width: 150px; }
@@ -146,5 +153,4 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
   .settings-panel { padding: 12px; }
   .admin-item { grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "role" "cameras" "source" "actions"; }
   .admin-item-actions { justify-content: start; margin-top: 5px; }
-  .role-picker { grid-column: 1 / -1; }
 }
