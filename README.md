@@ -48,18 +48,17 @@ duration. Its HLS worker preserves
 the source video and converts audio to AAC for browsers. It stops after two minutes
 without media requests. All viewers share the selected profile.
 
-The viewer is a prototype. Lightweight playback works on the tested device; the live
-viewer targets roughly one four-second segment behind the stream. The web PTZ path
-uses the camera-compatible WS-Addressing XML; a bounded leftward browser click was
-physically confirmed, while other directions still need validation. Live RTSP probes
-of both profiles report 15 fps. ONVIF `GetProfiles` reports
-a 30 fps frame-rate limit for each profile, but the camera still emits 15 fps; 60 fps
-is not advertised.
-These capabilities are not regular-use acceptance yet.
+The viewer now has per-camera stream controls, bulk start/stop and quality actions,
+and a saved browser preference to start Full HD streams. The service supports
+independent configured camera workers. Application accounts and recording are not
+implemented; the viewer still authenticates with the default camera's credentials.
+A real second-camera test remains outstanding.
 
-See [design and requirements](docs/design.md) for planned independent multi-camera
-viewing, application accounts, saved startup preferences and bounded recording with
-verified delivery. These expanded capabilities are not implemented yet. The web
-runtime currently loads one configured camera per process.
+Both profiles currently emit 15 fps. A reversible ONVIF write and reconnect test
+failed to change the FHD stream to 30 fps. The camera reported its configured limit
+as 30 fps throughout; the saved encoder configuration was restored. No 60 fps support
+was found. The page measures and displays actual FPS from a current stream segment.
+See [the viewer notes](docs/web-viewer.md) and [design](docs/design.md) for evidence
+and remaining acceptance work.
 
 Run local checks with `PYTHONPATH=src python3 -m unittest discover -s tests`.

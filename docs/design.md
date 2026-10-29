@@ -18,9 +18,10 @@ seconds; this excludes delay before HLS. The UI reports that distinction. Source
 keyframes currently produce four-second segments.
 
 Both observed RTSP profiles emit 15 fps: main 1920×1080 and substream 640×360. ONVIF
-advertises up to 30 fps but returns inconsistent encoder metadata. No encoder-write
-experiment has yet established 30 fps. No evidence supports 60 fps. Playback-rate
-catch-up is not a camera FPS change.
+reports a 30 fps encoder limit, but a reversible 15/30 encoder write, readback and
+reconnect experiment left the FHD stream at 15 fps. The original encoder configuration
+was restored and two fresh segments verified at 15 fps. No evidence supports 60 fps.
+The viewer reports measured source FPS and does not offer an unverified FPS selector.
 
 ## Independent cameras and a shared control panel
 
@@ -175,12 +176,14 @@ removes disposable test media after evidence is collected.
 ## Delivery order and acceptance
 
 1. Source FPS evidence: demonstrate the actual 15/30 result and verified restoration.
-2. Independent multi-camera viewing: keep two streams active; selection, stop, quality
-   and PTZ affect only their intended camera. One failing camera leaves the other usable.
-3. Application access: demonstrate role/grant isolation, source restrictions, session
-   revocation, media authorization and administrator recovery with two accounts.
-4. Startup and frontend: saved FHD/autostart survives restart; bulk operations report
-   partial failures; multiple players remain usable without growing playback lag.
+2. Independent multi-camera viewing: the backend and compact grid support independent
+   configured workers, per-camera controls, and bulk start/stop and quality. Acceptance
+   still needs two real cameras; one failing camera must leave the other usable.
+3. Application access: still to implement. Demonstrate role/grant isolation, source
+   restrictions, session revocation, media authorization and administrator recovery.
+4. Startup and frontend: the browser can save local Full HD autostart. Acceptance still
+   needs restart behavior, partial bulk failures and live-lag observation with multiple
+   players.
 5. Local recording: manual clip, lightweight ring and scheduled/external triggers stay
    within quota through restart and a simulated destination outage. Verify checksums,
    idempotency and removal of disposable test media.

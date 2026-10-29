@@ -1,11 +1,33 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Local camera</title><link rel="stylesheet" href="/style.css">
-<main><h1>Local camera</h1><p>Local live HLS video. No cloud uploads.</p>
-<section><label>Quality <select id="profiles"></select></label><button id="start">Start or retry video</button><button id="stop">Stop video</button></section>
-<video id="video" controls autoplay muted playsinline></video>
-<p id="live-latency" aria-live="off">Player delay from HLS live edge: measuring...</p>
-<section class="ptz-settings"><label for="ptz-duration">Movement per click</label><input id="ptz-duration" type="range" min="0.2" max="1" step="0.1" value="0.8"><output id="ptz-duration-value">0.8 s</output></section>
-<section class="ptz"><button data-pan="0" data-tilt="0.25">↑</button><div><button data-pan="-0.25" data-tilt="0">←</button><button id="ptz-stop">Stop PTZ</button><button data-pan="0.25" data-tilt="0">→</button></div><button data-pan="0" data-tilt="-0.25">↓</button></section>
-<p>The delay readout measures playback behind the HLS playlist, not any delay inside the camera's RTSP feed. The video timeline shows playback position, not live delay. The movement slider sets how long each PTZ command lasts. Use video controls for audio and fullscreen.</p><output id="status" aria-live="polite">Loading profiles...</output>
-</main><script src="/vendor/hls.min.js"></script><script src="/app.js"></script></html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Camera viewer</title>
+<link rel="stylesheet" href="/style.css">
+<main>
+  <header><div><h1>Camera viewer</h1><p>Local live video. No cloud uploads.</p></div><output id="status" aria-live="polite">Loading cameras...</output></header>
+  <section class="toolbar" aria-label="Camera actions">
+    <label>All cameras <select id="bulk-action"><option value="">Choose action</option><option value="start">Start all</option><option value="stop">Stop all</option></select></label>
+    <button id="apply-action">Apply</button>
+    <label>All-camera quality <select id="bulk-quality"><option value="fhd">Full HD when available</option><option value="light">Lightest available</option></select></label>
+    <button id="apply-quality">Apply quality to all</button>
+    <label class="check"><input id="autostart" type="checkbox"> Start Full HD on page load</label>
+  </section>
+  <section id="camera-grid" class="camera-grid" aria-label="Configured cameras"></section>
+  <section class="controls">
+    <h2>PTZ controls</h2>
+    <label>Selected camera <select id="selected-camera"></select></label>
+    <label class="duration" for="ptz-duration">Movement per click</label>
+    <input id="ptz-duration" type="range" min="0.2" max="1" step="0.1" value="0.8">
+    <output id="ptz-duration-value">0.8 s</output>
+    <div class="ptz" aria-label="Pan and tilt">
+      <button data-pan="0" data-tilt="0.25" aria-label="Tilt up">↑</button>
+      <div><button data-pan="-0.25" data-tilt="0" aria-label="Pan left">←</button><button id="ptz-stop">Stop</button><button data-pan="0.25" data-tilt="0" aria-label="Pan right">→</button></div>
+      <button data-pan="0" data-tilt="-0.25" aria-label="Tilt down">↓</button>
+    </div>
+    <p>FPS and dimensions are measured from the current source segment. The delay readout is player delay behind the HLS edge, not camera-to-screen latency.</p>
+  </section>
+</main>
+<script src="/vendor/hls.min.js"></script>
+<script src="/app.js"></script>
+</html>

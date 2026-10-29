@@ -11,9 +11,9 @@ import unittest
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from yoosee_cam_utils.web import make_server, Streams
+from yoosee_cam_utils.web import make_server, Streams, CameraRegistry
 
 
 class WebTests(unittest.TestCase):
@@ -72,6 +72,25 @@ class WebTests(unittest.TestCase):
         with self.request("/api/profiles", authorized=True) as r:
             self.assertEqual(json.load(r), [{"token": "profile0"}])
 
+    def test_stream_status_reports_measured_source_fps(self):
+        stream_dir = self.root / "measured-stream"
+        stream_dir.mkdir()
+        (stream_dir / "index.m3u8").write_text("#EXTM3U\nseg000000001.ts\n")
+        (stream_dir / "seg000000001.ts").write_bytes(b"sample")
+        result = subprocess.CompletedProcess([], 0, '{"streams":[{"width":1920,"height":1080,"avg_frame_rate":"15/1"}]}', "")
+        with patch("yoosee_cam_utils.web.subprocess.run", return_value=result) as probe:
+            measured = Streams._measure_latest_segment(stream_dir)
+        self.assertEqual(measured, {"width": 1920, "height": 1080, "fps": 15.0})
+        self.assertEqual(probe.call_args.kwargs["timeout"], 3)
+
+    def test_source_fps_probe_failure_does_not_fail_status(self):
+        stream_dir = self.root / "unavailable-stream"
+        stream_dir.mkdir()
+        (stream_dir / "index.m3u8").write_text("#EXTM3U\nseg000000001.ts\n")
+        (stream_dir / "seg000000001.ts").write_bytes(b"sample")
+        with patch("yoosee_cam_utils.web.subprocess.run", side_effect=subprocess.TimeoutExpired("ffprobe", 3)):
+            self.assertIsNone(Streams._measure_latest_segment(stream_dir))
+
     def test_repeated_invalid_auth_is_rate_limited(self):
         for _ in range(12):
             with self.assertRaises(urllib.error.HTTPError) as e:
@@ -109,6 +128,119 @@ class WebTests(unittest.TestCase):
             self.request("/", authorized=True)
         self.assertEqual(e.exception.code, 403)
         e.exception.close()
+
+    def add_second_camera(self):
+        second = Mock()
+        second.profiles.return_value = [{"token": "profile-other"}]
+        second.status.return_value = {"active": True, "profile": "profile-other", "playlist": "/media/stream-other/index.m3u8"}
+        second.start.return_value = second.status.return_value
+        cameras = {"cam01": Mock(c={"name": "First"}), "cam02": Mock(c={"name": "Second"})}
+        self.streams.status.return_value = {"active": False, "profile": None, "playlist": None}
+        self.server.cameras = CameraRegistry(cameras, streams={"cam01": self.streams, "cam02": second})
+        return second
+
+    def test_scoped_camera_operations_select_only_requested_worker(self):
+        second = self.add_second_camera()
+        with self.request("/api/cameras/cam02/start", authorized=True, data={"profile": "profile-other"}, extra={"X-Camera-Client": "1"}) as response:
+            self.assertEqual(json.load(response)["playlist"], "/media/cam02/stream-other/index.m3u8")
+        second.start.assert_called_once_with("profile-other")
+        self.streams.start.assert_not_called()
+        with self.request("/api/cameras/cam02/stop", authorized=True, data={}, extra={"X-Camera-Client": "1"}) as response:
+            self.assertFalse(json.load(response)["active"])
+        second.stop.assert_called_once_with()
+        self.streams.stop.assert_not_called()
+
+    def test_camera_inventory_is_local_and_excludes_credentials(self):
+        second = self.add_second_camera()
+        with self.request("/api/cameras", authorized=True) as response:
+            result = json.load(response)
+        self.assertEqual([camera["id"] for camera in result], ["cam01", "cam02"])
+        self.assertTrue(result[1]["active"])
+        self.assertNotIn("playlist", result[1])
+        self.assertNotIn("password", json.dumps(result))
+        second.profiles.assert_not_called()
+        self.streams.profiles.assert_not_called()
+
+    def test_scoped_media_uses_only_requested_camera_and_requires_auth(self):
+        second = self.add_second_camera()
+        second.media.return_value = b"video segment"
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/media/cam02/stream-other/seg000000001.ts")
+        self.assertEqual(error.exception.code, 401)
+        error.exception.close()
+        second.media.assert_not_called()
+        with self.request("/media/cam02/stream-other/seg000000001.ts", authorized=True) as response:
+            self.assertEqual(response.read(), b"video segment")
+        second.media.assert_called_once_with("stream-other", "seg000000001.ts")
+        self.streams.media.assert_not_called()
+
+    def test_unknown_camera_is_rejected_without_dispatch(self):
+        second = self.add_second_camera()
+        for path, data in (("/api/cameras/unknown/status", None), ("/api/cameras/unknown/start", {"profile": "profile0"}), ("/media/unknown/stream/seg000000001.ts", None)):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request(path, authorized=True, data=data, extra={"X-Camera-Client": "1"})
+            self.assertEqual(error.exception.code, 404)
+            error.exception.close()
+        second.start.assert_not_called()
+        self.streams.start.assert_not_called()
+
+    def test_failure_is_reported_only_for_affected_camera(self):
+        second = self.add_second_camera()
+        self.streams.profiles.side_effect = OSError("private internal transport detail")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/cameras/cam01/profiles", authorized=True)
+        self.assertEqual(error.exception.code, 503)
+        error.exception.close()
+        with self.request("/api/cameras/cam02/profiles", authorized=True) as response:
+            self.assertEqual(json.load(response), [{"token": "profile-other"}])
+        with self.request("/api/cameras/cam01/status", authorized=True) as response:
+            self.assertFalse(json.load(response)["active"])
+        with self.request("/api/cameras", authorized=True) as response:
+            result = json.load(response)
+        self.assertEqual(result[0]["error"], "Camera operation failed")
+        self.assertIsNone(result[1]["error"])
+        self.assertNotIn("private internal", json.dumps(result))
+
+    def test_slow_camera_rpc_does_not_block_other_camera_media(self):
+        first = Streams(Mock(), self.root / "registry-first")
+        second = Streams(Mock(), self.root / "registry-second")
+        second.stream_dir = second.directory / "active"
+        second.stream_dir.mkdir()
+        (second.stream_dir / "seg000000001.ts").write_bytes(b"independent segment")
+        registry = CameraRegistry({"cam01": first.camera, "cam02": second.camera}, streams={"cam01": first, "cam02": second})
+        entered, release = threading.Event(), threading.Event()
+        def blocked_profiles():
+            entered.set()
+            release.wait(3)
+            return []
+        first.camera.profiles.side_effect = blocked_profiles
+        worker = threading.Thread(target=lambda: registry.invoke("cam01", "profiles"), daemon=True)
+        worker.start()
+        self.assertTrue(entered.wait(1))
+        try:
+            started = time.monotonic()
+            self.assertEqual(registry.get("cam02").media("active", "seg000000001.ts"), b"independent segment")
+            self.assertFalse(registry.invoke("cam02", "status")["active"])
+            self.assertLess(time.monotonic() - started, .25)
+        finally:
+            release.set()
+            worker.join(1)
+        self.assertFalse(worker.is_alive())
+
+    def test_registry_shutdown_attempts_other_workers_after_failure(self):
+        first, second = Mock(), Mock()
+        first.stop.side_effect = OSError("cleanup failure")
+        registry = CameraRegistry({"cam01": Mock(), "cam02": Mock()}, streams={"cam01": first, "cam02": second})
+        with self.assertRaisesRegex(OSError, "Camera worker cleanup failed"):
+            registry.stop_all()
+        second.stop.assert_called_once_with()
+
+    def test_registry_rejects_unsafe_or_unmatched_camera_ids(self):
+        for camera_id in ("../cam", "", "cam/name", "cam%2Fname"):
+            with self.assertRaises(ValueError):
+                CameraRegistry({camera_id: Mock()}, streams={camera_id: Mock()}, default_camera=camera_id)
+        with self.assertRaises(ValueError):
+            CameraRegistry({"cam01": Mock()}, streams={"other": Mock()})
 
     def test_actual_media_rejects_log_and_traversal(self):
         streams = Streams(Mock(), self.root / "cache")

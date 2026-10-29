@@ -60,12 +60,21 @@ browser click moved the camera left and it stopped. The slider sends a duration 
 0.2 to 1.0 seconds in 0.1-second steps, defaulting to 0.8 seconds. Other directions
 and playback continuity during movement remain unverified.
 
-Live RTSP probes of both profiles report 15 fps: 1920×1080 for the main stream and
-640×360 for the substream. ONVIF `GetProfiles` reports a 30 fps frame-rate limit for
-both, but the observed streams remain at 15 fps. The inspected ONVIF options do not
-advertise 60 fps. The ONVIF configuration and emitted streams disagree, so no FPS
-selector is exposed until a reversible encoder-setting test demonstrates that it
-changes the actual stream.
+Live RTSP and HLS segment probes of both profiles report 15 fps: 1920×1080 for the
+main stream and 640×360 for the substream. Each four-second FHD segment contains 60
+frames. ONVIF reports a 30 fps configured limit, but the emitted stream remains at
+15 fps. I tested the saved main encoder configuration with requested limits of 15 and
+30, both live and after reconnecting the HLS worker. Readback stayed at 30 and the
+stream stayed at 15 in every case. I restored the saved encoder configuration and
+verified another two FHD segments at 15 fps. The inspected ONVIF options do not
+advertise 60 fps. No FPS selector is exposed because the camera ignored the 30 fps
+change; the UI displays measured output FPS instead.
+
+The camera grid has independent configured workers, profile selectors and stream
+controls, with bulk start/stop and quality actions. The browser can save a local
+preference to start each camera at Full HD when available. This preference lives in
+that browser's local storage. A real second camera, separate application accounts,
+and per-camera authorization remain unverified or unimplemented.
 All project text and UI strings must remain English.
 
 ## User service
