@@ -52,8 +52,9 @@ profile selector and centered PTZ toggle with its own movement duration. The glo
 stream toggle starts all stopped cameras or stops all active cameras; with a mixed
 selection it stops the active streams. Bulk quality actions switch all cameras to Full
 HD when available or their lightest profile. The hamburger menu switches between Home
-and Settings. Security / Access has separate Access and Users tabs and is shown only to
-web administrators. The browser can save a preference to start Full HD streams when the
+and Settings. The media icon below it opens the clip library. Security / Access has
+separate Access and Users tabs and is shown only to web administrators. The browser
+can save a preference to start Full HD streams when the
 page opens. An allowed source IP still needs a valid
 account. The application allowlist does not change the host firewall; update that
 separately when a new subnet must reach the service. The server checks the TCP peer
@@ -85,8 +86,11 @@ worker stops after 120 seconds without media requests.
 ## Recording sessions
 
 Recording is enabled only when `[recording].enabled = true` in the private operator
-config. A camera administrator can start and stop an FHD session from its camera card
-with one stateful button.
+config. Users with a camera viewing grant can start and stop their own FHD session from
+its camera card. Sessions are scoped to the user and camera. One user cannot start a
+second session for the same camera while their first is active; different users and
+cameras do not share a global recording lock. The configured default permits four
+concurrent sessions across the service to bound disk and camera load.
 The default auto-stop limit is one hour; presets include 15 and 30 minutes. A custom
 limit applies only to the current browser tab and is capped at 12 hours. The server
 validates that cap on every request. It saves separate clips no longer than 15
@@ -95,13 +99,30 @@ short gap between clips. Stopping early finalizes the current segment. The spool
 configured byte limit and free-space reserve; when either is reached, the session
 stops with a status message.
 
-Each saved segment is verified with ffprobe and has a sidecar with dimensions,
-measured FPS, duration, size and SHA-256. Startup removes incomplete temporary files
-and media without a valid sidecar. The viewer provides authenticated downloads and
-camera administrators can delete clips from the camera tile. There is no automatic
-retention policy, 24/7 ring, motion trigger, schedule or lumber delivery in this
-release. A second RTSP session may affect live viewing on cameras with a low session
-limit; validate that behavior before enabling continuous capture.
+Each saved segment is copied into MP4 without video transcoding, verified with ffprobe
+and has a sidecar with camera ID, owner, sequence number, UTC start/end, dimensions,
+measured FPS, duration, size and SHA-256. A sequence counter survives clip deletion.
+The browser localizes the weekday/date label; the inline filename uses the camera ID,
+English short weekday, local timestamp to seconds, sequence and FHD/HD/SD label.
+Startup removes incomplete temporary files and media without a valid sidecar.
+
+The Media page plays clips in the client's browser with HTTP byte-range requests. The
+server serves file bytes and does not decode or transcode them for playback. New clips
+support seeking in browsers with H.264/AAC MP4 support. Older Matroska clips remain
+available through the same route, though browser codec support varies. The camera
+cards show up to ten visible clips from the previous 24 hours. The Media page lists
+all visible clips for cameras the account can view. Owners can delete their own clips.
+Camera administrators can hide or delete clips from cameras they administer; web
+administrators can do so for every camera. Hidden clips are omitted from normal lists
+and playback and appear only in the administrators' Hidden view.
+
+The active store is the local private spool. Clip metadata records a stable clip ID,
+storage backend and replication state so a future Lumber delivery adapter can copy
+verified files and keep the local copy until remote acknowledgement. No Lumber
+replication or fallback transfer is active yet. There is no automatic retention
+policy, 24/7 ring, motion trigger or schedule in this release. Each recording adds an
+RTSP session and may affect live viewing on cameras with a low session limit; verify
+simultaneous load before enabling continuous capture.
 
 ## Current limitations
 

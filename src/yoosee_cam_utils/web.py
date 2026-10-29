@@ -689,7 +689,23 @@ class UserStore:
         grant = user.get("cameras", {}).get(camera_id)
         if action == "view":
             return grant in ("viewer", "camera_admin")
+        if action == "record":
+            return grant in ("viewer", "camera_admin")
         return grant == "camera_admin"
+
+    @staticmethod
+    def can_manage_clip(user, camera_id, owner):
+        if owner == user.get("username"):
+            return True
+        if "web_admin" in user.get("roles", [user.get("role")]):
+            return True
+        return user.get("cameras", {}).get(camera_id) == "camera_admin"
+
+    @staticmethod
+    def can_manage_hidden(user, camera_id):
+        if "web_admin" in user.get("roles", [user.get("role")]):
+            return True
+        return user.get("cameras", {}).get(camera_id) == "camera_admin"
 
 
 class ViewerServer(ThreadingHTTPServer):
@@ -728,18 +744,66 @@ class Handler(BaseHTTPRequestHandler):
             # The browser can cancel a slow camera operation while it is running.
             pass
 
-    def respond_clip(self, path, clip_id):
+    def respond_clip(self, path, camera_id, clip_id, display_name=None):
         size = path.stat().st_size
-        self.send_response(200)
-        self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Length", str(size))
-        self.send_header("Content-Disposition", f'attachment; filename="{clip_id}.mkv"')
+        start, end, code = 0, size - 1, 200
+        request_range = self.headers.get("Range")
+        if request_range:
+            if len(request_range) > 128:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", request_range.strip())
+            if not match or not any(match.groups()):
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            first, last = match.groups()
+            if first:
+                start = int(first)
+                end = int(last) if last else size - 1
+            else:
+                suffix = int(last)
+                start = max(0, size - suffix)
+            if start >= size or end < start:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            end = min(end, size - 1)
+            code = 206
+        length = end - start + 1
+        suffix = path.suffix.lower()
+        mime = "video/mp4" if suffix == ".mp4" else "video/x-matroska"
+        filename = re.sub(r"[^A-Za-z0-9_.-]", "_", display_name or f"{camera_id}_{clip_id}")[:120]
+        self.send_response(code)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Content-Disposition", f'inline; filename="{filename}{suffix}"')
+        self.send_header("Accept-Ranges", "bytes")
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
         self.end_headers()
-        with path.open("rb") as stream:
-            shutil.copyfileobj(stream, self.wfile, length=1024 * 1024)
+        try:
+            with path.open("rb") as stream:
+                stream.seek(start)
+                remaining = length
+                while remaining:
+                    chunk = stream.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except OSError:
+            # Range reads are cancelled when a browser seeks or closes its player.
+            self.close_connection = True
 
     def respond_live(self, camera_id, stream_id):
         worker = self.server.cameras.get(camera_id)
@@ -819,7 +883,26 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, self.server.hls_js.read_bytes(), "text/javascript")
             elif path == "/api/cameras":
                 visible = [item | {"can_control": self.server.users.can(self.auth_user, item["id"], "control")} for item in self.server.cameras.summary() if self.server.users.can(self.auth_user, item["id"], "view")]
+                recording_enabled = bool(getattr(self.server.clips, "enabled", False))
+                visible = [item | {"can_record": recording_enabled and self.server.users.can(self.auth_user, item["id"], "record")} for item in visible]
                 self.respond(200, json.dumps(visible).encode())
+            elif path == "/api/media/clips":
+                query = parse_qs(urlsplit(self.path).query)
+                hidden = query.get("hidden", ["0"])[0] == "1"
+                result = []
+                for camera in self.server.cameras.cameras:
+                    if not self.server.users.can(self.auth_user, camera, "view"):
+                        continue
+                    if hidden and not self.server.users.can_manage_hidden(self.auth_user, camera):
+                        continue
+                    clips = self.server.clips.list_clips(camera, include_hidden=hidden, hidden_only=hidden)
+                    for clip in clips:
+                        clip["can_delete"] = self.server.users.can_manage_clip(self.auth_user, camera, clip.get("owner"))
+                        clip["can_hide"] = self.server.users.can_manage_hidden(self.auth_user, camera)
+                        result.append(clip)
+                result.sort(key=lambda item: item.get("started_at", ""), reverse=True)
+                is_admin = any(self.server.users.can_manage_hidden(self.auth_user, camera) for camera in self.server.cameras.cameras)
+                self.respond(200, json.dumps({"clips": result, "can_view_hidden": is_admin}).encode())
             elif path == "/api/admin/users":
                 if self.require_web_admin():
                     self.respond(200, json.dumps(self.server.users.inventory()).encode())
@@ -842,9 +925,19 @@ class Handler(BaseHTTPRequestHandler):
                 camera_id = parts[3]
                 if not self.can_camera(camera_id, "view"): return
                 if len(parts) == 5:
-                    self.respond(200, json.dumps(self.server.clips.list_clips(camera_id)).encode())
+                    query = parse_qs(urlsplit(self.path).query)
+                    hidden = query.get("hidden", ["0"])[0] == "1"
+                    if hidden and not self.server.users.can_manage_hidden(self.auth_user, camera_id):
+                        self.respond(403); return
+                    recent = query.get("recent", ["0"])[0] == "1"
+                    clips = self.server.clips.list_clips(camera_id, include_hidden=hidden, hidden_only=hidden,
+                        since_seconds=24 * 60 * 60 if recent else None, limit=10 if recent else None)
+                    for clip in clips:
+                        clip["can_delete"] = self.server.users.can_manage_clip(self.auth_user, camera_id, clip.get("owner"))
+                        clip["can_hide"] = self.server.users.can_manage_hidden(self.auth_user, camera_id)
+                    self.respond(200, json.dumps(clips).encode())
                 else:
-                    self.respond(200, json.dumps(self.server.clips.status(parts[5], camera_id)).encode())
+                    self.respond(200, json.dumps(self.server.clips.status(camera_id, parts[5], self.auth_user["username"])).encode())
             elif re.fullmatch(r"/api/cameras/[^/]+/recording", path):
                 camera_id = path.split("/")[3]
                 try:
@@ -853,11 +946,14 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(404); return
                 if not self.can_camera(camera_id, "view"): return
                 session_id = parse_qs(urlsplit(self.path).query).get("session_id", [None])[0]
-                self.respond(200, json.dumps(self.server.clips.status(camera_id, session_id)).encode())
+                self.respond(200, json.dumps(self.server.clips.status(camera_id, session_id, self.auth_user["username"])).encode())
             elif re.fullmatch(r"/recordings/[^/]+/[a-f0-9]{32}", path):
                 _, _, camera_id, clip_id = path.split("/")
                 if not self.can_camera(camera_id, "view"): return
-                self.respond_clip(self.server.clips.clip_path(camera_id, clip_id), clip_id)
+                metadata = self.server.clips.clip_metadata(camera_id, clip_id)
+                if metadata.get("hidden_at") and not self.server.users.can_manage_hidden(self.auth_user, camera_id):
+                    self.respond(404); return
+                self.respond_clip(self.server.clips.clip_path(camera_id, clip_id), camera_id, clip_id, metadata.get("display_name"))
             elif path == "/api/profiles":
                 if not self.can_camera(self.server.cameras.default_camera, "view"): return
                 self.respond(200, json.dumps(self.server.cameras.invoke(self.server.cameras.default_camera, "profiles")).encode())
@@ -922,14 +1018,48 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.cameras.get(camera_id)
                 except KeyError:
                     self.respond(404); return
-                if not self.can_camera(camera_id, "record"): return
+                if not self.can_camera(camera_id, "view"): return
                 try:
+                    metadata = self.server.clips.clip_metadata(camera_id, parts[5])
+                    if not self.server.users.can_manage_clip(self.auth_user, camera_id, metadata.get("owner")):
+                        self.respond(403); return
                     self.server.clips.delete_clip(camera_id, parts[5])
                     self.respond(200, b'{"deleted":true}'); return
                 except (ValueError, OSError) as error:
                     self.respond(409, json.dumps({"error": str(error)}).encode()); return
                 except KeyError:
                     self.respond(404); return
+            elif re.fullmatch(r"/api/cameras/[^/]+/clips/[a-f0-9]{32}/(hide|restore)", path):
+                parts = path.split("/")
+                camera_id, clip_id, operation = parts[3], parts[5], parts[6]
+                try:
+                    if not self.server.users.can_manage_hidden(self.auth_user, camera_id):
+                        self.respond(403); return
+                    self.server.clips.set_hidden(camera_id, clip_id, operation == "hide", self.auth_user["username"])
+                    self.respond(200, json.dumps({"hidden": operation == "hide"}).encode()); return
+                except KeyError:
+                    self.respond(404); return
+                except (ValueError, OSError) as error:
+                    self.respond(409, json.dumps({"error": str(error)}).encode()); return
+            elif re.fullmatch(r"/api/media/clips/[^/]+/[a-f0-9]{32}/(hide|restore|delete)", path):
+                parts = path.split("/")
+                camera_id, clip_id, operation = parts[4], parts[5], parts[6]
+                if not self.can_camera(camera_id, "view"): return
+                try:
+                    metadata = self.server.clips.clip_metadata(camera_id, clip_id)
+                    if operation == "delete":
+                        if not self.server.users.can_manage_clip(self.auth_user, camera_id, metadata.get("owner")):
+                            self.respond(403); return
+                        self.server.clips.delete_clip(camera_id, clip_id)
+                    else:
+                        if not self.server.users.can_manage_hidden(self.auth_user, camera_id):
+                            self.respond(403); return
+                        self.server.clips.set_hidden(camera_id, clip_id, operation == "hide", self.auth_user["username"])
+                    self.respond(200, json.dumps({"updated": True}).encode()); return
+                except KeyError:
+                    self.respond(404); return
+                except (ValueError, OSError) as error:
+                    self.respond(409, json.dumps({"error": str(error)}).encode()); return
             elif re.fullmatch(r"/api/cameras/[^/]+/recording/(start|stop)", path):
                 camera_id, operation = path.split("/")[3], path.rsplit("/", 1)[1]
                 try:
@@ -939,9 +1069,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not self.can_camera(camera_id, "record"): return
                 try:
                     if operation == "start":
-                        result = self.server.clips.start(camera_id, data.get("profile"), data.get("max_seconds"))
+                        result = self.server.clips.start(camera_id, data.get("profile"), data.get("max_seconds"), self.auth_user["username"])
                     else:
-                        result = self.server.clips.stop(camera_id, data.get("session_id"))
+                        result = self.server.clips.stop(camera_id, data.get("session_id"), self.auth_user["username"])
                 except (ValueError, OSError) as error:
                     self.respond(409, json.dumps({"error": str(error)}).encode()); return
                 except KeyError:

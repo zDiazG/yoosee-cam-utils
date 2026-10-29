@@ -41,9 +41,11 @@ button:disabled, select:disabled, input:disabled { opacity: .55; cursor: not-all
 .button-stop-record, .button-danger { border-color: #a85858; background: #4a292b; color: #ffd2cf; }
 .button-danger:hover:not(:disabled), .button-stop-record:hover:not(:disabled) { background: #633638; }
 .masthead { display: grid; grid-template-columns: 38px minmax(0, 1fr) minmax(220px, .8fr); align-items: end; gap: 12px; margin-bottom: 18px; }
-.nav-control { position: relative; align-self: start; z-index: 5; }
+.nav-control { position: relative; align-self: start; z-index: 5; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .menu-toggle { width: 38px; min-width: 38px; min-height: 38px; padding: 4px; font-size: 1.1rem; }
-.nav-menu { position: absolute; top: 46px; left: 0; width: 190px; padding: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); box-shadow: 0 12px 28px #0008; }
+.nav-media { display: grid; place-items: center; width: 38px; min-width: 38px; min-height: 38px; padding: 8px; color: var(--muted); }
+.nav-media svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.nav-menu { position: absolute; top: 0; left: 46px; width: 190px; padding: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); box-shadow: 0 12px 28px #0008; }
 .nav-menu > button, .nav-settings > button, .settings-submenu button { width: 100%; border: 0; background: transparent; text-align: left; }
 .nav-menu > button, .nav-settings > button { display: flex; justify-content: space-between; align-items: center; }
 .nav-menu > button:hover, .nav-settings > button:hover, .settings-submenu button:hover { background: #33434e; }
@@ -88,6 +90,21 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .clip-row a { color: var(--accent); overflow-wrap: anywhere; }
 .clip-row small { color: var(--muted); }
 .clip-row button { flex: 0 0 auto; }
+.media-view { max-width: 1080px; }
+.media-heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.media-heading > div > p:last-child { margin-top: 4px; }
+.media-heading-actions { display: flex; align-items: center; gap: 10px; }
+.media-heading-actions > label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .86rem; }
+.media-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); align-items: start; gap: 12px; }
+.media-card { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.media-card-heading { display: grid; gap: 2px; margin-bottom: 8px; }
+.media-card-heading strong { overflow-wrap: anywhere; font-size: .9rem; }
+.media-owner, .media-metadata small { color: var(--muted); font-size: .78rem; }
+.media-card video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #070a0c; border-radius: 5px; }
+.media-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.media-metadata summary { cursor: pointer; color: #c8d5dc; font-size: .8rem; }
+.media-metadata small { display: block; margin-top: 5px; overflow-wrap: anywhere; }
+.media-empty { padding: 18px; border: 1px dashed var(--border); border-radius: 8px; }
 .ptz-inline { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 9px; }
 .ptz-inline summary { width: fit-content; cursor: pointer; color: #c8d5dc; font-size: .88rem; font-weight: 600; }
 .ptz-inline-content { display: flex; width: min(100%, 208px); margin: 8px auto 0; align-items: center; flex-direction: column; gap: 7px; }
@@ -148,6 +165,8 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
   .toolbar { gap: 12px; }
   .autostart { margin-left: 0; }
   .camera-grid { grid-template-columns: minmax(0, 1fr); }
+  .media-list { grid-template-columns: minmax(0, 1fr); }
+  .media-heading { align-items: start; flex-direction: column; }
   .ptz-inline-content { align-items: center; }
   .recording-actions > label { flex: 1 1 100%; }
   .settings-panel { padding: 12px; }

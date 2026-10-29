@@ -206,20 +206,20 @@ class WebTests(unittest.TestCase):
         self.server.clips.status.return_value={"camera_id":"cam02","state":"idle"}
         with self.request("/api/cameras/cam02/recording",authorized=True,username="camadmin",password="another-long-test-password") as response:
             self.assertEqual(json.load(response)["state"],"idle")
-        self.server.clips.status.assert_called_once_with("cam02",None)
+        self.server.clips.status.assert_called_once_with("cam02",None,"camadmin")
         with self.request("/api/cameras/cam02/recording?session_id="+"b"*32,authorized=True,username="camadmin",password="another-long-test-password") as response:
             self.assertEqual(json.load(response)["state"],"idle")
-        self.assertEqual(self.server.clips.status.call_args_list[-1].args,("cam02","b"*32))
+        self.assertEqual(self.server.clips.status.call_args_list[-1].args,("cam02","b"*32,"camadmin"))
         with self.assertRaises(urllib.error.HTTPError) as admin_error:
             self.request("/api/admin/users",authorized=True,username="camadmin",password="another-long-test-password")
         self.assertEqual(admin_error.exception.code,403)
         admin_error.exception.close()
         with self.request("/api/cameras/cam02/recording/start",authorized=True,data={"profile":"profile-other","max_seconds":3600},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password") as response:
             self.assertEqual(response.status,202)
-        self.server.clips.start.assert_called_once_with("cam02","profile-other",3600)
+        self.server.clips.start.assert_called_once_with("cam02","profile-other",3600,"camadmin")
         with self.request("/api/cameras/cam02/recording/stop",authorized=True,data={"session_id":"a"*32},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password") as response:
             self.assertEqual(json.load(response)["state"],"stopped")
-        self.server.clips.stop.assert_called_once_with("cam02","a"*32)
+        self.server.clips.stop.assert_called_once_with("cam02","a"*32,"camadmin")
         with self.assertRaises(urllib.error.HTTPError) as record_error:
             self.request("/api/cameras/cam01/recording/start",authorized=True,data={"profile":"profile0","max_seconds":3600},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password")
         self.assertEqual(record_error.exception.code,403)
@@ -245,34 +245,48 @@ class WebTests(unittest.TestCase):
         self.assertEqual(error.exception.code,403)
         error.exception.close()
 
-    def test_viewer_can_list_and_download_clips_but_cannot_record(self):
+    def test_viewer_can_play_and_record_own_clips(self):
         clip_id="a"*32
-        clip_path=self.root/"authorized-clip.mkv";clip_path.write_bytes(b"private camera recording")
+        clip_path=self.root/"authorized-clip.mp4";clip_path.write_bytes(b"private camera recording")
         self.server.clips=Mock()
         self.server.clips.list_clips.return_value=[{"id":clip_id,"camera_id":"cam01","trigger":"manual"}]
         self.server.clips.status.return_value={"id":clip_id,"camera_id":"cam01","state":"complete"}
         self.server.clips.clip_path.return_value=clip_path
+        self.server.clips.clip_metadata.return_value={"owner":"clip-viewer","display_name":"cam01_Wed_20261029_193023_000001_FHD"}
+        self.server.clips.start.return_value={"id":"c"*32,"state":"recording"}
+        self.server.clips.stop.return_value={"id":"c"*32,"state":"stopped"}
         data={"username":"clip-viewer","password":"viewer-clip-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":["127.0.0.0/8"]}
         with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}): pass
         with self.request("/api/cameras/cam01/clips",authorized=True,username="clip-viewer",password="viewer-clip-password") as response:
             self.assertEqual(json.load(response)[0]["id"],clip_id)
-        self.server.clips.list_clips.assert_called_once_with("cam01")
+        self.server.clips.list_clips.assert_called_once_with("cam01",include_hidden=False,hidden_only=False,since_seconds=None,limit=None)
         with self.request(f"/api/cameras/cam01/clips/{clip_id}",authorized=True,username="clip-viewer",password="viewer-clip-password") as response:
             self.assertEqual(json.load(response)["state"],"complete")
-        self.server.clips.status.assert_called_once_with(clip_id,"cam01")
+        self.server.clips.status.assert_called_once_with("cam01",clip_id,"clip-viewer")
         with self.request(f"/recordings/cam01/{clip_id}",authorized=True,username="clip-viewer",password="viewer-clip-password") as response:
             self.assertEqual(response.read(),b"private camera recording")
-            self.assertEqual(response.headers["Content-Disposition"],f'attachment; filename="{clip_id}.mkv"')
-        with self.assertRaises(urllib.error.HTTPError) as error:
-            self.request("/api/cameras/cam01/recording/start",authorized=True,data={"profile":"profile0","max_seconds":3600},extra={"X-Camera-Client":"1"},username="clip-viewer",password="viewer-clip-password")
-        self.assertEqual(error.exception.code,403)
-        error.exception.close()
-        self.server.clips.start.assert_not_called()
-        with self.assertRaises(urllib.error.HTTPError) as error:
-            self.request("/api/cameras/cam01/recording/stop",authorized=True,data={"session_id":"b"*32},extra={"X-Camera-Client":"1"},username="clip-viewer",password="viewer-clip-password")
-        self.assertEqual(error.exception.code,403)
-        error.exception.close()
-        self.server.clips.stop.assert_not_called()
+            self.assertEqual(response.headers["Content-Disposition"],'inline; filename="cam01_Wed_20261029_193023_000001_FHD.mp4"')
+            self.assertEqual(response.headers["Accept-Ranges"],"bytes")
+        with self.request(f"/recordings/cam01/{clip_id}",authorized=True,extra={"Range":"bytes=0-6"},username="clip-viewer",password="viewer-clip-password") as response:
+            self.assertEqual(response.status,206)
+            self.assertEqual(response.read(),b"private")
+            self.assertEqual(response.headers["Content-Range"],"bytes 0-6/24")
+        with self.request("/api/cameras/cam01/recording/start",authorized=True,data={"profile":"profile0","max_seconds":3600},extra={"X-Camera-Client":"1"},username="clip-viewer",password="viewer-clip-password") as response:
+            self.assertEqual(json.load(response)["state"],"recording")
+        self.server.clips.start.assert_called_once_with("cam01","profile0",3600,"clip-viewer")
+        with self.request("/api/cameras/cam01/recording/stop",authorized=True,data={"session_id":"c"*32},extra={"X-Camera-Client":"1"},username="clip-viewer",password="viewer-clip-password") as response:
+            self.assertEqual(json.load(response)["state"],"stopped")
+        self.server.clips.stop.assert_called_once_with("cam01","c"*32,"clip-viewer")
+        with self.request(f"/api/cameras/cam01/clips/{clip_id}/delete",authorized=True,data={},extra={"X-Camera-Client":"1"},username="clip-viewer",password="viewer-clip-password") as response:
+            self.assertTrue(json.load(response)["deleted"])
+        self.server.clips.delete_clip.assert_called_once_with("cam01",clip_id)
+
+    def test_viewer_cannot_delete_another_users_clip(self):
+        clip_id="a"*32
+        self.server.clips=Mock()
+        self.server.clips.clip_metadata.return_value={"owner":"another-user"}
+        data={"username":"clip-viewer","password":"viewer-clip-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":["127.0.0.0/8"]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}): pass
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.request(f"/api/cameras/cam01/clips/{clip_id}/delete",authorized=True,data={},extra={"X-Camera-Client":"1"},username="clip-viewer",password="viewer-clip-password")
         self.assertEqual(error.exception.code,403)
@@ -284,6 +298,7 @@ class WebTests(unittest.TestCase):
         data={"username":"clip-admin","password":"clip-admin-password","role":"camera_admin","camera_permissions":{"cam01":"camera_admin"},"networks":["127.0.0.0/8"]}
         with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}): pass
         clip_id="b"*32
+        self.server.clips.clip_metadata.return_value={"owner":"clip-owner"}
         with self.request(f"/api/cameras/cam01/clips/{clip_id}/delete",authorized=True,data={},extra={"X-Camera-Client":"1"},username="clip-admin",password="clip-admin-password") as response:
             self.assertTrue(json.load(response)["deleted"])
         self.server.clips.delete_clip.assert_called_once_with("cam01",clip_id)
@@ -291,6 +306,15 @@ class WebTests(unittest.TestCase):
             self.request(f"/api/cameras/cam02/clips/{clip_id}/delete",authorized=True,data={},extra={"X-Camera-Client":"1"},username="clip-admin",password="clip-admin-password")
         self.assertEqual(error.exception.code,404)
         error.exception.close()
+
+    def test_camera_admin_can_hide_clip_for_assigned_camera(self):
+        self.server.clips=Mock()
+        data={"username":"clip-admin","password":"clip-admin-password","role":"camera_admin","camera_permissions":{"cam01":"camera_admin"},"networks":["127.0.0.0/8"]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}): pass
+        clip_id="d"*32
+        with self.request(f"/api/media/clips/cam01/{clip_id}/hide",authorized=True,data={},extra={"X-Camera-Client":"1"},username="clip-admin",password="clip-admin-password") as response:
+            self.assertTrue(json.load(response)["updated"])
+        self.server.clips.set_hidden.assert_called_once_with("cam01",clip_id,True,"clip-admin")
 
     def test_user_source_ip_restriction_is_enforced(self):
         data={"username":"one-source","password":"source-policy-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":["127.0.0.2/32"]}

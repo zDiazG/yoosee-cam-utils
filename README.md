@@ -54,12 +54,14 @@ start/stop and quality actions, a saved browser preference to start Full HD stre
 and local viewer accounts with combined roles, camera grants and source-IP
 restrictions. Users can receive web-administrator and camera-administrator access
 together. The first web administrator uses the default camera login. When manual
-recording is enabled in the local config, camera administrators can start an FHD
-session. It saves separate
-clips of up to 15 minutes, stops after one hour by default, and allows a session-only
-custom cap of up to 12 hours. A bounded private spool stops recording when its quota or
-free-space reserve is reached. Continuous recording, automatic retention/delivery,
-and a real second-camera test remain outstanding. Camera admins can delete saved clips.
+recording is enabled in the local config, users with camera access can record FHD
+clips. Segments are copied into MP4 without video transcoding, with a default one-hour
+session limit and a maximum of 12 hours. A bounded private spool stops recording when
+its quota or free-space reserve is reached. The Media page plays clips in the browser.
+Owners can delete their own clips; camera and web administrators can hide or delete
+clips from other users. Camera tiles show the ten latest visible clips from the last
+24 hours. Lumber replication, continuous recording, automatic retention/delivery, and
+a real second-camera test remain outstanding.
 
 Earlier checks reported 15 fps on both profiles. A later timestamp count measured
 10.0 fps on FHD and 10.1 fps on the lightweight profile despite the stream reporting
