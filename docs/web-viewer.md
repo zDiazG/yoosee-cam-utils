@@ -37,6 +37,16 @@ with a timeout and an explicit stop; do not repeatedly click while waiting for t
 delayed video to catch up. The active quality and Stop Video action are shared by
 all viewers. A worker is stopped after 120 seconds without media requests.
 
+## Current limitations
+
+The lightweight profile works on the tested camera. Full HD eventually stabilizes
+but can stall during startup for several minutes. The cause is not established.
+Changing the selector currently requires the Open Video button; automatic stream
+replacement is planned. PTZ calls can return success without physical movement and
+can temporarily disturb Full HD playback on the tested firmware. PTZ compatibility
+therefore remains unresolved. No source-FPS setting is currently exposed. All
+project text and UI strings must remain English.
+
 ## User service
 
 ```sh
