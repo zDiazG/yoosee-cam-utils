@@ -29,12 +29,21 @@ and reject cross-origin browser requests.
 Open `https://YOUR_SERVER:8780` and use the configured default camera credentials at
 the browser's authentication prompt on first run. That account bootstraps the first
 web administrator. The administrator can add web administrators, camera-scoped
-administrators and viewers, edit grants, set or reset passwords, restrict each user
-to source networks, disable accounts and manage the viewer's global source allowlist.
+administrators and viewers, combine these roles on one account, edit grants, set or
+reset passwords, restrict each user to source networks, disable accounts and manage
+the viewer's global source allowlist. Web administrators also have view and control
+access to every configured camera. Camera-administrator and viewer grants can be
+combined and scoped per camera. The role picker includes All roles and selects every
+role currently exposed by the server.
 Password hashes are stored in the private SQLite database configured by
-`auth_database`; new or reset passwords need 12 characters. The database file is
-created with mode 0600. A web administrator with no per-user network list can connect
-from any address in the global allowlist. A configured per-user list narrows access.
+`auth_database`; new or reset passwords need 12 to 256 characters. The database file
+is created with mode 0600. New accounts require at least one source IP or CIDR.
+Comma-separated, semicolon-separated and whitespace-separated lists are accepted for
+source networks and camera IDs. A numeric suffix such as `02` resolves to the
+configured camera ID `cam02`; `ALL` selects every configured camera. View-only and
+control camera grants are entered separately. The server validates each value,
+limits each list to 64 entries, uses parameterized database statements and returns
+field-level validation messages. User-entered values are rendered as text, never HTML.
 Video starts muted because browsers restrict autoplay with sound; unmute in the video
 controls. Profiles are labeled using advertised resolutions, which may
 differ from the mobile app's HD/FHD labels. Each camera card has a single stream toggle,
