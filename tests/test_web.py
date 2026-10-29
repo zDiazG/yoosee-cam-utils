@@ -191,6 +191,18 @@ class WebTests(unittest.TestCase):
         operation, namespace, action, body = camera.call.call_args.args
         self.assertEqual((operation, action), ("ptz", "ContinuousMove"))
         ET.fromstring(f'<root xmlns:m="{namespace}">{body}</root>')
+        self.assertTrue(camera.call.call_args.kwargs["addressing"])
+        camera.stop.assert_called_once_with("profile0")
+
+    def test_ptz_stops_when_addressed_move_fails(self):
+        camera = Mock()
+        streams = Streams(camera, self.root / "ptz-failure-cache")
+        streams.profile = "profile0"
+        camera.call.side_effect = OSError("transport failure")
+
+        with self.assertRaisesRegex(OSError, "transport failure"):
+            streams.ptz(pan=0.25, duration=0.2)
+
         camera.stop.assert_called_once_with("profile0")
 
 

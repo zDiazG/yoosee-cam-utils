@@ -27,10 +27,11 @@ and reject cross-origin browser requests.
 ```
 
 Open `https://YOUR_SERVER:8780` and use the configured camera credentials at the
-browser's authentication prompt. Select a profile and open the video. Video starts
+browser's authentication prompt. Video starts
 muted because browsers restrict autoplay with sound; unmute in the video controls.
 Profiles are labeled using the resolutions advertised by the camera, which may
-differ from its mobile app's HD/FHD labels.
+differ from its mobile app's HD/FHD labels. Changing the profile replaces the current
+player and starts the selected stream; Start or retry is available if startup fails.
 
 HLS introduces several seconds of video delay. PTZ requests are short movements
 with a timeout and an explicit stop; do not repeatedly click while waiting for the
@@ -39,13 +40,13 @@ all viewers. A worker is stopped after 120 seconds without media requests.
 
 ## Current limitations
 
-The lightweight profile works on the tested camera. Full HD eventually stabilizes
-but can stall during startup for several minutes. The cause is not established.
-Changing the selector currently requires the Open Video button; automatic stream
-replacement is planned. PTZ calls can return success without physical movement and
-can temporarily disturb Full HD playback on the tested firmware. PTZ compatibility
-therefore remains unresolved. No source-FPS setting is currently exposed. All
-project text and UI strings must remain English.
+The lightweight profile works on the tested camera. Full HD takes several minutes to
+stabilize in the user's browser, but server-side HLS output remained continuous in a
+26-second sample; the browser delay's cause is not established. A bounded
+WS-Addressing PTZ request moved the camera right and the user confirmed it stopped.
+The viewer integration is being updated to use that request. Other directions and
+playback continuity during movement remain unverified. No source-FPS setting is
+currently exposed. All project text and UI strings must remain English.
 
 ## User service
 

@@ -7,8 +7,10 @@ recording and event/manual Full HD clips delivered to a configurable storage hos
 The recording path must work without Frigate or a cloud camera account.
 
 The current prototype provides authenticated HTTPS viewing and CLI diagnostics.
-Low-bandwidth viewing works on a tested device. Full HD startup can stall before
-settling; PTZ acknowledgements have not produced verified physical motion. FPS
+Low-bandwidth viewing works on a tested device. Full HD takes several minutes to
+stabilize in the user's browser, although a recent server HLS sample was continuous.
+A bounded WS-Addressing PTZ request moved the camera right and the user confirmed
+that it stopped; web integration and remaining directions are not yet accepted. FPS
 configuration, continuous recording and a durable clip-transfer queue are not
 implemented. API success and short media samples do not establish regular use.
 

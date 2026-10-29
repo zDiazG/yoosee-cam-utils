@@ -47,10 +47,11 @@ video/audio, profile selection and short PTZ movements. Its HLS worker preserves
 the source video and converts audio to AAC for browsers. It stops after two minutes
 without media requests. All viewers share the selected profile.
 
-The viewer is a prototype. Lightweight playback works on the tested device;
-Full HD can take minutes to settle after startup. PTZ requests can be acknowledged
-without physical movement. Automatic quality switching and verified source-FPS
-controls remain pending. These capabilities are not regular-use acceptance yet.
+The viewer is a prototype. Lightweight playback works on the tested device; Full HD
+can take minutes to settle after startup. A WS-Addressing PTZ request moved the camera
+right in one bounded test; the updated web control and other directions still need
+validation. Automatic quality switching is implemented. Verified source-FPS controls
+remain pending. These capabilities are not regular-use acceptance yet.
 
 See [design and requirements](docs/design.md) for the planned recording and
 verified-transfer behavior. Continuous recording and event uploads are not implemented.

@@ -15,6 +15,7 @@ import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 
@@ -92,14 +93,23 @@ class Camera:
         self.last = 0.0
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    def call(self, service, namespace, operation, children=""):
+    def call(self, service, namespace, operation, children="", addressing=False):
         time.sleep(max(0, 0.4 - (time.monotonic() - self.last)))
         path = self.c.get(f"{service}_path", f"/onvif/{service}_service")
         if not path.startswith("/") or "\n" in path or "\r" in path:
             raise ValueError("invalid service path")
         url = f'http://{self.c["host"]}:{self.c["onvif_port"]}{path}'
         body = f'<m:{operation} xmlns:m="{namespace}">{children}</m:{operation}>'
-        xml = f'<s:Envelope xmlns:s="{SOAP}"><s:Header>{security(self.c["username"], self.c["password"])}</s:Header><s:Body>{body}</s:Body></s:Envelope>'
+        header = security(self.c["username"], self.c["password"])
+        if addressing:
+            wsa = "http://schemas.xmlsoap.org/ws/2004/08/addressing"
+            target = escape(url)
+            header = (
+                f'<a:Action xmlns:a="{wsa}">{namespace}/{operation}</a:Action>'
+                f'<a:MessageID xmlns:a="{wsa}">urn:uuid:{uuid.uuid4()}</a:MessageID>'
+                f'<a:To xmlns:a="{wsa}">{target}</a:To>{header}'
+            )
+        xml = f'<s:Envelope xmlns:s="{SOAP}"><s:Header>{header}</s:Header><s:Body>{body}</s:Body></s:Envelope>'
         request = urllib.request.Request(url, data=xml.encode(), headers={"Content-Type": "application/soap+xml; charset=utf-8", "Connection": "close"})
         try:
             with self.opener.open(request, timeout=6) as response:

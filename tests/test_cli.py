@@ -111,6 +111,21 @@ class CameraTests(unittest.TestCase):
         self.assertIn("a&lt;&amp;", xml)
         self.assertNotIn("test-secret!", xml)
 
+    def test_addressing_envelope_targets_requested_operation_and_service(self):
+        cam = cli.Camera(self.c)
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b"<ok/>"
+        cam.opener.open = Mock(return_value=response)
+
+        cam.call("ptz", cli.PTZ, "ContinuousMove", "<m:ProfileToken/>", addressing=True)
+
+        request = cam.opener.open.call_args.args[0]
+        root = ET.fromstring(request.data)
+        self.assertEqual(root.findtext(".//{http://schemas.xmlsoap.org/ws/2004/08/addressing}Action"), f"{cli.PTZ}/ContinuousMove")
+        self.assertEqual(root.findtext(".//{http://schemas.xmlsoap.org/ws/2004/08/addressing}To"), "http://192.0.2.10:5000/onvif/ptz_service")
+
 
 if __name__ == "__main__":
     unittest.main()
