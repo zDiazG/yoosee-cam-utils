@@ -6,29 +6,60 @@
 <link rel="stylesheet" href="/style.css">
 <main>
   <header class="masthead">
-    <div><p class="eyebrow">LOCAL CAMERA CONSOLE</p><h1>Camera viewer</h1><p>Live video and local recordings. No cloud uploads.</p></div>
+    <div class="nav-control">
+      <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Open navigation" aria-expanded="false">☰</button>
+      <nav id="nav-menu" class="nav-menu" aria-label="Main navigation" hidden>
+        <button id="nav-home" type="button">Home</button>
+        <div class="nav-settings" hidden>
+          <button id="nav-settings" type="button" aria-haspopup="true">Settings <span aria-hidden="true">›</span></button>
+          <div class="settings-submenu">
+            <button id="nav-security" type="button">Security / Access</button>
+          </div>
+        </div>
+      </nav>
+    </div>
+    <div class="masthead-copy">
+      <p class="eyebrow">LOCAL CAMERA CONSOLE</p>
+      <h1>Camera viewer</h1>
+      <p>Live video and local recordings. No cloud uploads.</p>
+    </div>
     <output id="status" class="app-status" aria-live="polite">Loading cameras…</output>
   </header>
 
-  <section class="toolbar" aria-label="Stream controls">
-    <div class="toolbar-group">
-      <span class="group-label">Streams</span>
-      <button id="toggle-all" class="button-primary">Start all</button>
-    </div>
-    <div class="toolbar-group">
-      <span class="group-label">Start all at</span>
-      <button id="all-fhd" class="button-quiet">Full HD</button>
-      <button id="all-light" class="button-quiet">Lightest quality</button>
-    </div>
-    <label class="autostart"><input id="autostart" type="checkbox"> Start Full HD on page load</label>
+  <section id="home-view" class="page-view">
+    <section class="toolbar" aria-label="Stream controls">
+      <div class="toolbar-group">
+        <span class="group-label">Streams</span>
+        <button id="toggle-all" class="button-primary">Start all</button>
+      </div>
+      <div class="toolbar-group">
+        <span class="group-label">Start all at</span>
+        <button id="all-fhd" class="button-quiet">FHD</button>
+        <button id="all-light" class="button-quiet">Lightest</button>
+      </div>
+      <label class="autostart"><input id="autostart" type="checkbox"> Start FHD on page load</label>
+    </section>
+    <section id="camera-grid" class="camera-grid" aria-label="Configured cameras"></section>
   </section>
 
-  <section id="camera-grid" class="camera-grid" aria-label="Configured cameras"></section>
-
-  <details id="admin-panel" class="admin-panel" hidden>
-    <summary>Viewer access</summary>
-    <section class="admin-section">
-      <h2>Add account</h2>
+  <section id="settings-view" class="settings-view page-view" hidden>
+    <div class="settings-heading">
+      <p class="eyebrow">SETTINGS</p>
+      <h2>Security / Access</h2>
+      <p>Manage viewer accounts and source IP restrictions.</p>
+    </div>
+    <div class="settings-tabs" role="tablist" aria-label="Security and access settings">
+      <button id="access-tab" class="settings-tab" type="button" role="tab" aria-controls="access-panel" aria-selected="true">Access</button>
+      <button id="users-tab" class="settings-tab" type="button" role="tab" aria-controls="users-panel" aria-selected="false">Users</button>
+    </div>
+    <section id="access-panel" class="settings-panel" role="tabpanel" aria-labelledby="access-tab">
+      <h3>Allowed source networks</h3>
+      <p class="help-text">Accounts can connect only from these networks. This list does not change the host firewall.</p>
+      <div class="form-actions"><label>Add IP or CIDR <input id="new-network" placeholder="192.0.2.10/32"></label><button id="add-network" type="button">Add network</button></div>
+      <div id="network-list" class="admin-list"></div>
+    </section>
+    <section id="users-panel" class="settings-panel" role="tabpanel" aria-labelledby="users-tab" hidden>
+      <h3>Add account</h3>
       <div class="form-grid">
         <label>Username <input id="new-username" autocomplete="off"></label>
         <label>Password <input id="new-password" type="password" autocomplete="new-password" minlength="12"></label>
@@ -36,17 +67,12 @@
         <label>Camera IDs <input id="new-cameras" placeholder="cam01,cam02"></label>
         <label>Allowed IPs/CIDRs <input id="new-networks" placeholder="192.0.2.10/32"></label>
       </div>
-      <div class="form-actions"><button id="create-user" class="button-primary">Create account</button><button id="cancel-edit" hidden>Cancel edit</button></div>
+      <div class="form-actions"><button id="create-user" class="button-primary" type="button">Create account</button><button id="cancel-edit" type="button" hidden>Cancel edit</button></div>
       <p class="help-text">Passwords need at least 12 characters. Web administrators manage accounts and source networks. Camera administrators control assigned cameras. Viewers can watch and download clips.</p>
+      <h3 class="users-heading">Users</h3>
+      <div id="user-list" class="admin-list"></div>
     </section>
-    <section class="admin-section"><h2>Accounts</h2><div id="user-list" class="admin-list"></div></section>
-    <section class="admin-section">
-      <h2>Allowed source networks</h2>
-      <div class="form-actions"><label>Add IP or CIDR <input id="new-network" placeholder="192.0.2.10/32"></label><button id="add-network">Add network</button></div>
-      <div id="network-list" class="admin-list"></div>
-      <p class="help-text">This list does not change the host firewall. Add a firewall rule separately when a new subnet must reach this service.</p>
-    </section>
-  </details>
+  </section>
 </main>
 <script src="/vendor/hls.min.js"></script>
 <script src="/app.js"></script>

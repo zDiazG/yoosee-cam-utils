@@ -36,10 +36,9 @@ UDP media needs more than an RTSP TCP port forward, so tunnel checks must verify
 Use a camera registry with one independent worker lifecycle, RPC lock and error
 state per camera. Reuse current behavior behind camera-scoped APIs. One unreachable
 camera must not block another camera's media, PTZ or startup. A camera selection
-changes the shared controls and selected-camera video panel without stopping other
-camera workers. A compact grid can keep several live players visible. Detach hidden
-players to bound browser decoding; server-side desired state is independent of which
-panel is selected. Polling thumbnails must not create extra camera RTSP sessions.
+does not stop other workers. Keep the camera cards and controls independent so several
+live streams remain visible together. Collapsing PTZ or Settings must not stop a camera
+stream. Polling status must not create extra RTSP sessions.
 
 Each camera card has one stateful Start/Stop toggle, a quality selector, compact PTZ
 controls and its own movement-duration slider. One global toggle starts all stopped
@@ -93,12 +92,13 @@ Inspect existing private ingress before selecting a tunnel route or hostname.
 
 ## Frontend direction
 
-Keep vanilla HTML/CSS/JS with local hls.js. Improve responsive layout, typography,
-selected-camera status, compact grid, per-camera errors and clear active quality.
-Use one selected-camera control panel and a small administration view. Show requested
-versus actual FPS and HLS delay separately. Preserve keyboard/focus access and avoid
-extra frameworks or a Node server solely for styling. Browser state changes must
-ignore stale responses and release superseded HLS players/timers.
+Keep vanilla HTML/CSS/JS with local hls.js. Use compact independent camera cards,
+clear active quality, per-camera errors and an in-card PTZ toggle with a centered
+direction pad and short movement slider. A left menu switches Home and Settings;
+Security / Access contains separate Access and Users tabs. Show source FPS and HLS
+player delay separately. Preserve keyboard/focus access and avoid a Node server solely
+for styling. Browser state changes must ignore stale responses and release superseded
+HLS players/timers.
 
 ## Source FPS experiment
 
