@@ -37,9 +37,11 @@ created with mode 0600. A web administrator with no per-user network list can co
 from any address in the global allowlist. A configured per-user list narrows access.
 Video starts muted because browsers restrict autoplay with sound; unmute in the video
 controls. Profiles are labeled using advertised resolutions, which may
-differ from the mobile app's HD/FHD labels. Each tile has its own profile and
-start/stop controls. Bulk actions start or stop all configured cameras, or switch all
-to Full HD when available or their lightest profile. The browser can save a preference
+differ from the mobile app's HD/FHD labels. Each camera card has a single stream toggle,
+profile selector and compact PTZ controls with its own movement duration. The global
+stream toggle starts all stopped cameras or stops all active cameras; with a mixed
+selection it stops the active streams. Bulk quality actions switch all cameras to Full
+HD when available or their lightest profile. The browser can save a preference
 to start Full HD streams when the page opens. An allowed source IP still needs a valid
 account. The application allowlist does not change the host firewall; update that
 separately when a new subnet must reach the service. The server checks the TCP peer
@@ -62,7 +64,8 @@ worker stops after 120 seconds without media requests.
 ## Recording sessions
 
 Recording is enabled only when `[recording].enabled = true` in the private operator
-config. A camera administrator can start and stop an FHD session from the camera tile.
+config. A camera administrator can start and stop an FHD session from its camera card
+with one stateful button.
 The default auto-stop limit is one hour; presets include 15 and 30 minutes. A custom
 limit applies only to the current browser tab and is capped at 12 hours. The server
 validates that cap on every request. It saves separate clips no longer than 15
@@ -106,7 +109,8 @@ advertise 60 fps. No FPS selector is exposed because the camera ignored the 30 f
 change; the UI displays measured output FPS instead.
 
 The camera grid has independent configured workers, profile selectors and stream
-controls, with bulk start/stop and quality actions. The browser can save a local
+toggles, compact per-camera PTZ and recording controls, and bulk start/stop and quality
+actions. The browser can save a local
 preference to start each camera at Full HD when available. This preference lives in
 that browser's local storage. Account grants and source restrictions have unit
 coverage, but a real second camera remains untested. The source allowlist applies at
