@@ -44,9 +44,10 @@ The lightweight profile works on the tested camera. Full HD takes several minute
 stabilize in the user's browser, but server-side HLS output remained continuous in a
 26-second sample; the browser delay's cause is not established. A bounded
 WS-Addressing PTZ request moved the camera right and the user confirmed it stopped.
-The viewer integration is being updated to use that request. Other directions and
-playback continuity during movement remain unverified. No source-FPS setting is
-currently exposed. All project text and UI strings must remain English.
+The web API now uses that request format, and its integrated movement call returned
+HTTP200 with Stop confirmed. Other directions and playback continuity during movement
+remain unverified. No source-FPS setting is currently exposed. All project text and
+UI strings must remain English.
 
 ## User service
 

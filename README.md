@@ -48,8 +48,8 @@ the source video and converts audio to AAC for browsers. It stops after two minu
 without media requests. All viewers share the selected profile.
 
 The viewer is a prototype. Lightweight playback works on the tested device; Full HD
-can take minutes to settle after startup. A WS-Addressing PTZ request moved the camera
-right in one bounded test; the updated web control and other directions still need
+can take minutes to settle after startup. The web PTZ path now uses WS-Addressing; a
+bounded rightward move was physically confirmed, while other directions still need
 validation. Automatic quality switching is implemented. Verified source-FPS controls
 remain pending. These capabilities are not regular-use acceptance yet.
 

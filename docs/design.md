@@ -10,7 +10,8 @@ The current prototype provides authenticated HTTPS viewing and CLI diagnostics.
 Low-bandwidth viewing works on a tested device. Full HD takes several minutes to
 stabilize in the user's browser, although a recent server HLS sample was continuous.
 A bounded WS-Addressing PTZ request moved the camera right and the user confirmed
-that it stopped; web integration and remaining directions are not yet accepted. FPS
+that it stopped. The same request is integrated in the web API; other directions and
+playback continuity during movement are not yet accepted. FPS
 configuration, continuous recording and a durable clip-transfer queue are not
 implemented. API success and short media samples do not establish regular use.
 
