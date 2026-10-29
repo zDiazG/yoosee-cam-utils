@@ -685,6 +685,7 @@ async function setupAdmin() {
 
 function renderRoleChoices(options) {
   const list = document.querySelector('#role-options');
+  const selected = [...list.querySelectorAll('input:checked')].map(input => input.value);
   list.replaceChildren();
   for (const role of options) {
     const label = document.createElement('label');
@@ -696,11 +697,19 @@ function renderRoleChoices(options) {
     label.append(input, document.createTextNode(role.label));
     list.append(label);
   }
+  setSelectedRoles(selected.length ? selected : ['viewer']);
 }
 
 function updateAllRoles() {
   const choices = [...document.querySelectorAll('[data-role-choice]')];
-  document.querySelector('#role-all').checked = choices.length > 0 && choices.every(choice => choice.checked);
+  const selected = choices.filter(choice => choice.checked);
+  const all = choices.length > 0 && selected.length === choices.length;
+  document.querySelector('#role-all').checked = all;
+  document.querySelector('#role-all').indeterminate = selected.length > 0 && !all;
+  const summary = document.querySelector('#role-summary');
+  const labels = selected.map(choice => roleOptions.find(role => role.id === choice.value)?.label || choice.value);
+  summary.textContent = all ? 'ALL' : selected.length === 1 ? labels[0] : selected.length ? `${selected.length} roles` : 'Select roles';
+  summary.title = labels.join(', ');
 }
 
 function setSelectedRoles(selected) {
@@ -711,6 +720,7 @@ function setSelectedRoles(selected) {
 
 document.querySelector('#role-all').onchange = event => {
   for (const choice of document.querySelectorAll('[data-role-choice]')) choice.checked = event.target.checked;
+  updateAllRoles();
 };
 
 document.querySelector('#create-user').onclick = async () => {
@@ -797,10 +807,15 @@ document.querySelector('#nav-security').onclick = () => { showView('settings'); 
 document.querySelector('#access-tab').onclick = () => showSecurityTab('access');
 document.querySelector('#users-tab').onclick = () => showSecurityTab('users');
 document.addEventListener('click', event => {
+  if (!event.target.closest('#role-select')) document.querySelector('#role-select').open = false;
   if (!event.target.closest('.nav-control')) closeNavigation();
 });
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape') closeNavigation();
+  if (event.key === 'Escape') {
+    closeNavigation();
+    const roles = document.querySelector('#role-select');
+    if (roles.open) { roles.open = false; document.querySelector('#role-summary').focus(); }
+  }
   if (event.target.getAttribute('role') === 'tab' && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
     event.preventDefault();
     const next = event.target.id === 'access-tab' ? 'users' : 'access';
