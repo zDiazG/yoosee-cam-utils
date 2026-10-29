@@ -660,7 +660,8 @@ function clipLabel(clip) {
   }).format(new Date(clip.started_at));
   const width = Number(clip.width) || 0;
   const quality = width >= 1920 ? 'FHD' : width >= 1280 ? 'HD' : 'SD';
-  return `${clip.camera_id} · ${when} · #${String(clip.sequence || 0).padStart(6, '0')} · ${quality}`;
+  const duplicateId = clip.duplicate_count > 1 ? ` · ID ${String(clip.id).slice(0, 12)}` : '';
+  return `${clip.camera_id} · ${when} · ${quality}${duplicateId}`;
 }
 
 async function loadMedia() {

@@ -121,11 +121,24 @@ class RecordingTests(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(path.suffix, ".mp4")
             self.assertEqual(clip["owner"], "admin")
-            self.assertTrue(clip["sequence"])
+            self.assertRegex(clip["id"], r"^[0-9a-f]{32}$")
             self.assertEqual(clip["storage_backend"], "local")
             self.assertEqual(clip["replication_state"], "local_only")
-            self.assertRegex(clip["display_name"], r"cam01_[A-Z][a-z]{2}_\d{8}_\d{6}_\d{6}_FHD")
+            self.assertRegex(clip["display_name"], r"cam01_[A-Z][a-z]{2}_\d{8}_\d{6}_FHD")
         self.assertFalse(list(self.manager.directory.rglob("*.part.mp4")))
+
+    def test_duplicate_clips_get_individual_stable_ids_only_when_near_identical(self):
+        clips = [
+            {"id": "a" * 32, "started_at": "2026-10-29T12:00:00+00:00", "duration_seconds": 60, "width": 1920, "height": 1080},
+            {"id": "b" * 32, "started_at": "2026-10-29T12:00:10+00:00", "duration_seconds": 55, "width": 1920, "height": 1080},
+            {"id": "c" * 32, "started_at": "2026-10-29T12:00:00+00:00", "duration_seconds": 300, "width": 1920, "height": 1080},
+            {"id": "d" * 32, "started_at": "2026-10-29T12:00:00+00:00", "duration_seconds": 60, "width": 640, "height": 360},
+        ]
+        ClipManager._annotate_duplicate_groups(clips)
+        self.assertEqual(clips[0]["duplicate_count"], 2)
+        self.assertEqual(clips[1]["duplicate_count"], 2)
+        self.assertNotIn("duplicate_count", clips[2])
+        self.assertNotIn("duplicate_count", clips[3])
 
     def test_stop_finalizes_the_current_segment_and_keeps_prior_segments(self):
         gate = threading.Event()

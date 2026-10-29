@@ -158,9 +158,12 @@ A later local motion adapter needs explicit CPU and false-positive acceptance.
 
 Manual FHD recording writes to a private spool, copies video into MP4 without
 transcoding, verifies each segment with ffprobe, computes SHA-256 and stores metadata
-beside the file. Metadata includes the owner, stable sequence, camera ID, UTC times,
-backend ID, replication state and a safe display filename with camera, weekday,
-timestamp, sequence and resolution. The configurable spool defaults to 2 GiB with a
+beside the file. Each segment gets a random UUID stored in its filename and sidecar;
+deletion does not rewind an allocator, and later WhiteDwarf and Lumber writers do
+not need to coordinate counters or maintain an ID database. The safe display filename contains camera, weekday, timestamp
+and resolution. Near-identical overlapping clips receive their own short UUID suffix
+in the UI, computed from sidecar metadata without persistent duplicate records. The
+configurable spool defaults to 2 GiB with a
 5 GiB filesystem free-space reserve; sample config defaults recording off. Startup
 removes incomplete temporary output and orphaned media. Sessions are isolated by user
 and camera, with one active session per user/camera and a configurable global

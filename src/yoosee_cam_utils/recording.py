@@ -40,10 +40,6 @@ class ClipManager:
             self.directory.chmod(0o700)
         self.lock = threading.RLock()
         self.sessions = {}
-        self.sequence_file = self.directory / ".clip-sequence"
-        self.sequence = 0
-        if self.enabled:
-            self._load_sequence()
         self.closed = False
         if self.enabled:
             self._recover_spool()
@@ -99,41 +95,6 @@ class ClipManager:
                 raise ValueError("recording path must not contain symlinks")
             path.chmod(0o700)
         return output_dir
-
-    def _load_sequence(self):
-        if self.sequence_file.is_symlink():
-            raise ValueError("clip sequence file must not be a symlink")
-        try:
-            self.sequence = int(self.sequence_file.read_text().strip())
-        except FileNotFoundError:
-            self.sequence = 0
-        except OSError as error:
-            raise ValueError("clip sequence file cannot be read") from error
-        if self.sequence < 0:
-            raise ValueError("clip sequence file is invalid")
-        for metadata in self.directory.rglob("*.json"):
-            if metadata.is_symlink() or not metadata.is_file():
-                continue
-            try:
-                self.sequence = max(self.sequence, int(json.loads(metadata.read_text()).get("sequence", 0)))
-            except (OSError, ValueError, TypeError):
-                continue
-        self._save_sequence()
-
-    def _save_sequence(self):
-        temporary = self.sequence_file.with_suffix(".part")
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w") as stream:
-            stream.write(f"{self.sequence}\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, self.sequence_file)
-        directory_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
 
     def start(self, camera_id, profile, max_seconds=None, owner="admin"):
         if not self.enabled:
@@ -279,16 +240,12 @@ class ClipManager:
         final = part.with_name(f"{clip_id}.mp4")
         metadata_path = part.with_name(f"{clip_id}.json")
         digest = self._hash_file(part)
-        with self.lock:
-            self.sequence += 1
-            sequence = self.sequence
-            self._save_sequence()
         local_started = datetime.fromisoformat(started_at.replace("Z", "+00:00")).astimezone()
         quality = "FHD" if probe["width"] >= 1920 else "HD" if probe["width"] >= 1280 else "SD"
-        display_name = f"{session['camera_id']}_{local_started:%a_%Y%m%d_%H%M%S}_{sequence:06d}_{quality}"
+        display_name = f"{session['camera_id']}_{local_started:%a_%Y%m%d_%H%M%S}_{quality}"
         metadata = {
             "id": clip_id, "camera_id": session["camera_id"], "session_id": session["id"],
-            "sequence": sequence, "owner": session["owner"], "storage_backend": "local",
+            "owner": session["owner"], "storage_backend": "local",
             "storage_key": str(final.relative_to(self.directory)),
             "replication_state": "local_only", "display_name": display_name,
             "segment_index": index, "trigger": "manual", "started_at": started_at,
@@ -302,7 +259,7 @@ class ClipManager:
         except Exception:
             final.unlink(missing_ok=True)
             raise
-        summary = {key: metadata[key] for key in ("id", "sequence", "owner", "segment_index", "started_at", "duration_seconds", "width", "height", "fps", "bytes", "sha256")}
+        summary = {key: metadata[key] for key in ("id", "owner", "segment_index", "started_at", "duration_seconds", "width", "height", "fps", "bytes", "sha256")}
         session["segments"].append(summary)
         session["segment_count"] = len(session["segments"])
         return probe
@@ -422,7 +379,54 @@ class ClipManager:
             except (OSError, ValueError, TypeError):
                 continue
         result.sort(key=lambda item: item.get("started_at", ""), reverse=True)
+        self._annotate_duplicate_groups(result)
         return result[:limit] if limit else result
+
+    @staticmethod
+    def _annotate_duplicate_groups(clips):
+        """Mark near-identical captures so the UI can show each clip's stable ID."""
+        if len(clips) < 2:
+            return
+        starts = []
+        for clip in clips:
+            try:
+                starts.append(datetime.fromisoformat(clip["started_at"].replace("Z", "+00:00")).timestamp())
+            except (KeyError, OverflowError, TypeError, ValueError):
+                starts.append(None)
+        duplicate_counts = {}
+        ordered = sorted((value, index) for index, value in enumerate(starts) if value is not None)
+        for position, (left_start, left) in enumerate(ordered):
+            try:
+                left_duration = float(clips[left].get("duration_seconds", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if left_duration <= 0:
+                continue
+            left_end = left_start + left_duration
+            for right_position in range(position + 1, len(ordered)):
+                right_start, right = ordered[right_position]
+                if right_start - left_start > 30:
+                    break
+                left_clip, right_clip = clips[left], clips[right]
+                if (left_clip.get("width"), left_clip.get("height")) != (right_clip.get("width"), right_clip.get("height")):
+                    continue
+                try:
+                    right_duration = float(right_clip.get("duration_seconds", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if right_duration <= 0 or max(left_duration, right_duration) > 2 * min(left_duration, right_duration):
+                    continue
+                right_end = right_start + right_duration
+                if abs(left_end - right_end) > 30:
+                    continue
+                overlap = max(0, min(left_end, right_end) - max(left_start, right_start))
+                if overlap / min(left_duration, right_duration) < 0.8:
+                    continue
+                duplicate_counts[left] = duplicate_counts.get(left, 1) + 1
+                duplicate_counts[right] = duplicate_counts.get(right, 1) + 1
+
+        for index, count in duplicate_counts.items():
+            clips[index]["duplicate_count"] = count
 
     def _clip_path(self, camera_id, clip_id):
         if camera_id not in self.cameras.cameras or not isinstance(clip_id, str) or len(clip_id) != 32 or any(ch not in "0123456789abcdef" for ch in clip_id):
