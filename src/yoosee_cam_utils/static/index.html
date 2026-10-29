@@ -13,6 +13,28 @@
     <button id="apply-quality">Apply quality to all</button>
     <label class="check"><input id="autostart" type="checkbox"> Start Full HD on page load</label>
   </section>
+  <details id="admin-panel" hidden>
+    <summary>Viewer access</summary>
+    <section class="admin-section">
+      <h2>Add account</h2>
+      <label>Username <input id="new-username" autocomplete="off"></label>
+      <label>Password <input id="new-password" type="password" autocomplete="new-password" minlength="12"></label>
+      <label>Role <select id="new-role"><option value="viewer">Viewer</option><option value="camera_admin">Camera administrator</option><option value="web_admin">Web administrator</option></select></label>
+      <label>Camera IDs <input id="new-cameras" placeholder="cam01,cam02"></label>
+      <label>Allowed IPs/CIDRs <input id="new-networks" placeholder="192.0.2.10/32"></label>
+      <button id="create-user">Create account</button>
+      <button id="cancel-edit" hidden>Cancel edit</button>
+      <p>New passwords need at least 12 characters. Leave the password blank when saving access unless you also want to reset it. Web administrators can manage accounts and source networks. Camera administrators can control assigned cameras. Viewers can watch assigned cameras.</p>
+    </section>
+    <section class="admin-section"><h2>Accounts</h2><div id="user-list"></div></section>
+    <section class="admin-section">
+      <h2>Allowed source networks</h2>
+      <label>Add IP or CIDR <input id="new-network" placeholder="192.0.2.10/32"></label>
+      <button id="add-network">Add network</button>
+      <div id="network-list"></div>
+      <p>The viewer network list does not change the host firewall. Add a firewall rule separately when a new subnet must reach this service.</p>
+    </section>
+  </details>
   <section id="camera-grid" class="camera-grid" aria-label="Configured cameras"></section>
   <section class="controls">
     <h2>PTZ controls</h2>

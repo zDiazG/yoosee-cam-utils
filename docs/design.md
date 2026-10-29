@@ -7,9 +7,9 @@ controls, followed by bounded recording and verified delivery to configurable st
 It must work without Frigate or a vendor cloud account. All project text is English.
 
 The running prototype uses Python 3.11 standard-library HTTPS, vanilla HTML/CSS/JS,
-hls.js and FFmpeg. Node.js is not a runtime dependency. TOML already accepts named
-cameras, but the web process currently selects one camera and authenticates with its
-credentials. Multi-camera web control, application users and recording are planned.
+hls.js and FFmpeg. Node.js is not a runtime dependency. The web service supports
+independent configured camera workers, local application accounts and per-camera
+grants. Recording remains planned.
 
 The user accepted the current viewer and PTZ. A left-button web click physically
 moved and stopped the camera. Other directions need individual observation. The
@@ -71,27 +71,26 @@ usage and allow autostart to be disabled without deleting camera configuration.
 
 ## Users, access rules and tunnel boundaries
 
-Separate web accounts from device credentials. Store salted scrypt password hashes,
-roles and grants in private SQLite; keep camera secrets in protected external files.
-Use HTTPS sessions with Secure/HttpOnly/SameSite cookies, CSRF protection, server-side
-authorization on every API/media request, rate limits and revocable sessions.
+Separate web accounts from device credentials. The service stores salted scrypt
+password hashes, roles and grants in a private SQLite file and keeps camera secrets in
+protected external files. HTTPS Basic authentication is checked on every page, API
+and media request; invalid attempts are rate limited. Disabling an account blocks its
+next request. The service does not issue cookies or sessions.
 Do not send camera credentials to the browser or share one device password among users.
 
-Roles are global administrator, camera administrator scoped to assigned cameras,
-operator with view/PTZ grants, and viewer. The account called root is an application
-administrator, not an operating-system root login. Existing camera-admin login can
-be migrated into a camera-scoped web account without exposing its device secret.
-A global administrator manages cameras, users, grants and allowed source addresses.
-A camera administrator manages access and restricted mode for assigned cameras only.
+The implemented roles are `web_admin`, `camera_admin` and `viewer`. A web
+administrator manages accounts, camera grants and allowed source addresses. A camera
+administrator can control assigned cameras; a viewer can only watch assigned cameras.
+The initial web administrator is bootstrapped from the default camera login. The
+account database is mode 0600 under the service user's state directory. New account
+passwords require 12 characters.
 
 Maintain a global source-IP/CIDR allowlist with optional per-user restrictions.
-Initial private inventory includes the operator desktop, workstation, operations,
-storage and services hosts after their current addresses are resolved and reviewed.
-An allowed IP still requires authentication. A global restricted mode revokes normal
-sessions and admits only global administrators. Camera restricted mode admits global
-administrators and that camera's administrators; other cameras retain their grants.
-Changes must prevent accidental removal of the last working administrator access.
-Provide local CLI recovery for account/source-policy errors, with an audit trail.
+The operator maintains the initial private address inventory in ignored local
+configuration. Do not copy private addresses into tracked files.
+An allowed IP still requires authentication. Changes prevent disabling or downgrading
+the last enabled administrator and removing the current administrator's last allowed
+source network. Local CLI recovery and an audit trail remain open work.
 
 Direct requests use the socket peer address. Ignore forwarded identity/IP headers
 unless the peer is an explicitly trusted proxy. For a future reverse proxy, enforce
@@ -179,8 +178,9 @@ removes disposable test media after evidence is collected.
 2. Independent multi-camera viewing: the backend and compact grid support independent
    configured workers, per-camera controls, and bulk start/stop and quality. Acceptance
    still needs two real cameras; one failing camera must leave the other usable.
-3. Application access: still to implement. Demonstrate role/grant isolation, source
-   restrictions, session revocation, media authorization and administrator recovery.
+3. Application access: account creation, camera grants, source restrictions, account
+   disable and media authorization have unit coverage. Browser acceptance and local
+   administrator recovery remain outstanding.
 4. Startup and frontend: the browser can save local Full HD autostart. Acceptance still
    needs restart behavior, partial bulk failures and live-lag observation with multiple
    players.

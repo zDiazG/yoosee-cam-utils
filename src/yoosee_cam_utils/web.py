@@ -2,14 +2,19 @@
 import argparse
 import base64
 from collections import defaultdict, deque
+from contextlib import contextmanager
 import hashlib
 import hmac
 import ipaddress
 import json
 import math
+import os
 from pathlib import Path
 import re
+import secrets
 import shutil
+import sqlite3
+import stat
 import ssl
 import subprocess
 import sys
@@ -263,6 +268,221 @@ class CameraRegistry:
             raise OSError("Camera worker cleanup failed") from failures[0]
 
 
+class UserStore:
+    """Persistent viewer accounts and per-user camera/source grants."""
+
+    ROLES = {"web_admin", "camera_admin", "viewer"}
+
+    def __init__(self, path, bootstrap_username, bootstrap_password, camera_ids, networks):
+        self.path = Path(path).expanduser()
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+            os.close(fd)
+        except FileExistsError:
+            if self.path.is_symlink() or not self.path.is_file() or stat.S_IMODE(self.path.stat().st_mode) & 0o077:
+                raise ValueError("viewer account database permissions must be 0600")
+        self.lock = threading.RLock()
+        with self._session() as db:
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS users (
+                    username TEXT PRIMARY KEY, salt BLOB NOT NULL, password_hash BLOB NOT NULL,
+                    role TEXT NOT NULL CHECK(role IN ('web_admin','camera_admin','viewer')),
+                    enabled INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE IF NOT EXISTS user_cameras (
+                    username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                    camera_id TEXT NOT NULL, permission TEXT NOT NULL CHECK(permission IN ('viewer','camera_admin')),
+                    PRIMARY KEY(username,camera_id)
+                );
+                CREATE TABLE IF NOT EXISTS user_networks (
+                    username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                    cidr TEXT NOT NULL, PRIMARY KEY(username,cidr)
+                );
+                CREATE TABLE IF NOT EXISTS allowed_networks (cidr TEXT PRIMARY KEY);
+            """)
+            for network in networks:
+                db.execute("INSERT OR IGNORE INTO allowed_networks(cidr) VALUES (?)", (str(ipaddress.ip_network(network, strict=False)),))
+            if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
+                if not bootstrap_username or not bootstrap_password:
+                    raise ValueError("bootstrap viewer administrator is missing")
+                self._insert_user(db, bootstrap_username, bootstrap_password, "web_admin", camera_ids, [])
+                for network in networks:
+                    db.execute("INSERT OR IGNORE INTO user_networks(username,cidr) VALUES (?,?)", (bootstrap_username, str(ipaddress.ip_network(network, strict=False))))
+        self.path.chmod(0o600)
+
+    def _connect(self):
+        db = sqlite3.connect(self.path, timeout=5)
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys=ON")
+        return db
+
+    @contextmanager
+    def _session(self):
+        db = self._connect()
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    @staticmethod
+    def _hash(password, salt):
+        return hashlib.scrypt(password.encode(), salt=salt, n=2**14, r=8, p=1, dklen=32)
+
+    @staticmethod
+    def _valid_username(username):
+        return isinstance(username, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", username) is not None
+
+    def _insert_user(self, db, username, password, role, camera_ids, networks):
+        if not self._valid_username(username) or role not in self.ROLES or not isinstance(password, str) or len(password) < 8:
+            raise ValueError("invalid viewer account")
+        salt = secrets.token_bytes(16)
+        db.execute("INSERT INTO users(username,salt,password_hash,role) VALUES (?,?,?,?)", (username, salt, self._hash(password, salt), role))
+        if role != "web_admin":
+            for camera_id in camera_ids:
+                db.execute("INSERT INTO user_cameras(username,camera_id,permission) VALUES (?,?,?)", (username, camera_id, "camera_admin" if role == "camera_admin" else "viewer"))
+        for network in networks:
+            db.execute("INSERT INTO user_networks(username,cidr) VALUES (?,?)", (username, str(ipaddress.ip_network(network, strict=False))))
+
+    def authenticate(self, username, password, address):
+        if not self._valid_username(username) or not isinstance(password, str):
+            return None
+        with self.lock, self._session() as db:
+            row = db.execute("SELECT salt,password_hash,role,enabled FROM users WHERE username=?", (username,)).fetchone()
+            if not row or not row["enabled"]:
+                return None
+            try:
+                actual = self._hash(password, row["salt"])
+            except (ValueError, MemoryError):
+                return None
+            if not hmac.compare_digest(actual, row["password_hash"]):
+                return None
+            allowed = [ipaddress.ip_network(item[0]) for item in db.execute("SELECT cidr FROM allowed_networks")]
+            owned = [ipaddress.ip_network(item[0]) for item in db.execute("SELECT cidr FROM user_networks WHERE username=?", (username,))]
+            if not any(address in network for network in allowed) or (owned and not any(address in network for network in owned)):
+                return {"username": username, "role": row["role"], "source_allowed": False}
+            grants = {item[0]: item[1] for item in db.execute("SELECT camera_id,permission FROM user_cameras WHERE username=?", (username,))}
+            return {"username": username, "role": row["role"], "source_allowed": True, "cameras": grants}
+
+    @classmethod
+    def _validate_networks(cls, db, networks):
+        values = [str(ipaddress.ip_network(value, strict=False)) for value in networks]
+        if any(ipaddress.ip_network(value).prefixlen == 0 for value in values):
+            raise ValueError("default-route source networks are not allowed")
+        allowed = [ipaddress.ip_network(row[0]) for row in db.execute("SELECT cidr FROM allowed_networks")]
+        for value in values:
+            network = ipaddress.ip_network(value)
+            if not any(network.subnet_of(parent) for parent in allowed):
+                raise ValueError("user network is outside the global allowlist")
+        return values
+
+    def create_user(self, username, password, role, camera_permissions, networks, camera_ids):
+        if role not in self.ROLES or not isinstance(camera_permissions, dict) or not isinstance(networks, list) or not isinstance(password, str) or len(password) < 12:
+            raise ValueError("invalid viewer account")
+        if any(permission not in ("viewer", "camera_admin") for permission in camera_permissions.values()):
+            raise ValueError("invalid camera grant")
+        if role == "viewer" and any(permission != "viewer" for permission in camera_permissions.values()):
+            raise ValueError("viewer role cannot receive camera control")
+        if role != "web_admin" and (not camera_permissions or not networks):
+            raise ValueError("camera grants are required")
+        if set(camera_permissions) - set(camera_ids):
+            raise ValueError("unknown camera in grant")
+        with self.lock, self._session() as db:
+            checked_networks = self._validate_networks(db, networks)
+            self._insert_user(db, username, password, role, [], [])
+            for camera_id, permission in camera_permissions.items():
+                db.execute("INSERT INTO user_cameras(username,camera_id,permission) VALUES (?,?,?)", (username, camera_id, permission))
+            for network in checked_networks:
+                db.execute("INSERT INTO user_networks(username,cidr) VALUES (?,?)", (username, network))
+
+    def update_access(self, username, role, camera_permissions, networks, camera_ids, password=None):
+        if role not in self.ROLES or not isinstance(camera_permissions, dict) or not isinstance(networks, list):
+            raise ValueError("invalid viewer account")
+        if any(permission not in ("viewer", "camera_admin") for permission in camera_permissions.values()):
+            raise ValueError("invalid camera grant")
+        if role == "viewer" and any(permission != "viewer" for permission in camera_permissions.values()):
+            raise ValueError("viewer role cannot receive camera control")
+        if role != "web_admin" and (not camera_permissions or not networks):
+            raise ValueError("camera grants and source networks are required")
+        if password is not None and (not isinstance(password, str) or len(password) < 12):
+            raise ValueError("new passwords need at least 12 characters")
+        if set(camera_permissions) - set(camera_ids):
+            raise ValueError("unknown camera in grant")
+        with self.lock, self._session() as db:
+            row = db.execute("SELECT role,enabled FROM users WHERE username=?", (username,)).fetchone()
+            if not row:
+                raise KeyError("unknown user")
+            if row["enabled"] and row["role"] == "web_admin" and role != "web_admin":
+                active = db.execute("SELECT COUNT(*) FROM users WHERE role='web_admin' AND enabled=1").fetchone()[0]
+                if active <= 1:
+                    raise ValueError("cannot downgrade the last web administrator")
+            checked_networks = self._validate_networks(db, networks)
+            db.execute("UPDATE users SET role=? WHERE username=?", (role, username))
+            db.execute("DELETE FROM user_cameras WHERE username=?", (username,))
+            db.execute("DELETE FROM user_networks WHERE username=?", (username,))
+            for camera_id, permission in camera_permissions.items():
+                db.execute("INSERT INTO user_cameras(username,camera_id,permission) VALUES (?,?,?)", (username, camera_id, permission))
+            for network in checked_networks:
+                db.execute("INSERT INTO user_networks(username,cidr) VALUES (?,?)", (username, network))
+            if password is not None:
+                salt = secrets.token_bytes(16)
+                db.execute("UPDATE users SET salt=?,password_hash=? WHERE username=?", (salt, self._hash(password, salt), username))
+
+    def inventory(self):
+        with self.lock, self._session() as db:
+            result = []
+            for user in db.execute("SELECT username,role,enabled FROM users ORDER BY username"):
+                grants = {row[0]: row[1] for row in db.execute("SELECT camera_id,permission FROM user_cameras WHERE username=? ORDER BY camera_id", (user["username"],))}
+                networks = [row[0] for row in db.execute("SELECT cidr FROM user_networks WHERE username=? ORDER BY cidr", (user["username"],))]
+                result.append({"username": user["username"], "role": user["role"], "enabled": bool(user["enabled"]), "cameras": grants, "networks": networks})
+            return result
+
+    def set_enabled(self, username, enabled):
+        with self.lock, self._session() as db:
+            row = db.execute("SELECT role,enabled FROM users WHERE username=?", (username,)).fetchone()
+            if not row:
+                raise KeyError("unknown user")
+            if not enabled and row["role"] == "web_admin" and row["enabled"]:
+                active = db.execute("SELECT COUNT(*) FROM users WHERE role='web_admin' AND enabled=1").fetchone()[0]
+                if active <= 1:
+                    raise ValueError("cannot disable the last web administrator")
+            db.execute("UPDATE users SET enabled=? WHERE username=?", (int(enabled), username))
+
+    def is_global_network_allowed(self, address):
+        with self.lock, self._session() as db:
+            return any(address in ipaddress.ip_network(row[0]) for row in db.execute("SELECT cidr FROM allowed_networks"))
+
+    def list_networks(self):
+        with self.lock, self._session() as db:
+            return [row[0] for row in db.execute("SELECT cidr FROM allowed_networks ORDER BY cidr")]
+
+    def add_network(self, cidr):
+        parsed = ipaddress.ip_network(cidr, strict=False)
+        if parsed.prefixlen == 0:
+            raise ValueError("default-route source networks are not allowed")
+        network = str(parsed)
+        with self.lock, self._session() as db:
+            db.execute("INSERT OR IGNORE INTO allowed_networks(cidr) VALUES (?)", (network,))
+
+    def remove_network(self, cidr, current_address):
+        network = str(ipaddress.ip_network(cidr, strict=False))
+        with self.lock, self._session() as db:
+            remaining = [ipaddress.ip_network(row[0]) for row in db.execute("SELECT cidr FROM allowed_networks WHERE cidr<>?", (network,))]
+            if not any(current_address in item for item in remaining):
+                raise ValueError("cannot remove the current administrator source network")
+            db.execute("DELETE FROM allowed_networks WHERE cidr=?", (network,))
+
+    @staticmethod
+    def can(user, camera_id, action):
+        if user["role"] == "web_admin":
+            return True
+        grant = user.get("cameras", {}).get(camera_id)
+        if action == "view":
+            return grant in ("viewer", "camera_admin")
+        return grant == "camera_admin"
+
+
 class ViewerServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -295,7 +515,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def authorized(self):
         ip = ipaddress.ip_address(self.client_address[0])
-        if not any(ip in network for network in self.server.networks):
+        if not self.server.users.is_global_network_allowed(ip):
             self.respond(403); return False
         now = time.monotonic()
         with self.server.auth_lock:
@@ -308,13 +528,26 @@ class Handler(BaseHTTPRequestHandler):
             scheme, value = self.headers.get("Authorization", "").split(" ", 1)
             raw = base64.b64decode(value, validate=True).decode()
             username, password = raw.split(":", 1)
-            valid = scheme.lower() == "basic" and hmac.compare_digest(username.encode(), self.server.username.encode()) and hmac.compare_digest(password.encode(), self.server.password.encode())
+            user = self.server.users.authenticate(username, password, ip) if scheme.lower() == "basic" else None
         except (ValueError, UnicodeError):
-            valid = False
-        if not valid:
+            user = None
+        if not user:
             with self.server.auth_lock:
                 attempts.append(now)
             self.respond(401, challenge=True); return False
+        if not user["source_allowed"]:
+            self.respond(403); return False
+        self.auth_user = user
+        return True
+
+    def can_camera(self, camera_id, action):
+        if not self.server.users.can(self.auth_user, camera_id, action):
+            self.respond(403); return False
+        return True
+
+    def require_web_admin(self):
+        if self.auth_user["role"] != "web_admin":
+            self.respond(403); return False
         return True
 
     def do_GET(self):
@@ -328,19 +561,31 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/vendor/hls.min.js":
                 self.respond(200, self.server.hls_js.read_bytes(), "text/javascript")
             elif path == "/api/cameras":
-                self.respond(200, json.dumps(self.server.cameras.summary()).encode())
+                visible = [item for item in self.server.cameras.summary() if self.server.users.can(self.auth_user, item["id"], "view")]
+                self.respond(200, json.dumps(visible).encode())
+            elif path == "/api/admin/users":
+                if self.require_web_admin():
+                    self.respond(200, json.dumps(self.server.users.inventory()).encode())
+            elif path == "/api/admin/networks":
+                if self.require_web_admin():
+                    self.respond(200, json.dumps(self.server.users.list_networks()).encode())
             elif re.fullmatch(r"/api/cameras/[^/]+/(profiles|status)", path):
                 _, _, _, camera_id, operation = path.split("/")
+                if not self.can_camera(camera_id, "view"): return
                 self.respond(200, json.dumps(self.server.cameras.invoke(camera_id, operation)).encode())
             elif path == "/api/profiles":
+                if not self.can_camera(self.server.cameras.default_camera, "view"): return
                 self.respond(200, json.dumps(self.server.cameras.invoke(self.server.cameras.default_camera, "profiles")).encode())
             elif path == "/api/status":
+                if not self.can_camera(self.server.cameras.default_camera, "view"): return
                 self.respond(200, json.dumps(self.server.cameras.invoke(self.server.cameras.default_camera, "status")).encode())
             elif path.startswith("/media/"):
                 parts = path.split("/")
                 if len(parts) == 4:
+                    if not self.can_camera(self.server.cameras.default_camera, "view"): return
                     worker, stream_id, filename = self.server.streams, parts[2], parts[3]
                 elif len(parts) == 5:
+                    if not self.can_camera(parts[2], "view"): return
                     worker = self.server.cameras.get(parts[2])
                     stream_id, filename = parts[3], parts[4]
                 else:
@@ -371,21 +616,56 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.cameras.get(camera_id)
                 except KeyError:
                     self.respond(404); return
+                if not self.can_camera(camera_id, "control"): return
                 if operation == "start":
                     result = self.server.cameras.invoke(camera_id, "start", data["profile"])
                 elif operation == "stop":
                     self.server.cameras.invoke(camera_id, "stop"); result = {"active": False}
                 else:
                     result = self.server.cameras.invoke(camera_id, "ptz", float(data.get("pan", 0)), float(data.get("tilt", 0)), float(data.get("seconds", 0.2)), bool(data.get("stop", False)))
-            elif path == "/api/start": result = self.server.cameras.invoke(self.server.cameras.default_camera, "start", data["profile"])
+            elif path == "/api/admin/users":
+                if not self.require_web_admin(): return
+                self.server.users.create_user(
+                    data.get("username"), data.get("password"), data.get("role"),
+                    data.get("camera_permissions", {}), data.get("networks", []),
+                    list(self.server.cameras.cameras),
+                )
+                result = {"created": True}
+            elif path == "/api/admin/users/access":
+                if not self.require_web_admin(): return
+                self.server.users.update_access(
+                    data.get("username"), data.get("role"), data.get("camera_permissions", {}),
+                    data.get("networks", []), list(self.server.cameras.cameras), data.get("password") or None,
+                )
+                result = {"updated": True}
+            elif path in ("/api/admin/users/disable", "/api/admin/users/enable"):
+                if not self.require_web_admin(): return
+                username = data.get("username")
+                if username == self.auth_user["username"] and path.endswith("disable"):
+                    self.respond(409); return
+                self.server.users.set_enabled(username, path.endswith("enable"))
+                result = {"updated": True}
+            elif path == "/api/admin/networks/add":
+                if not self.require_web_admin(): return
+                self.server.users.add_network(data.get("cidr"))
+                result = {"added": True}
+            elif path == "/api/admin/networks/remove":
+                if not self.require_web_admin(): return
+                self.server.users.remove_network(data.get("cidr"), ipaddress.ip_address(self.client_address[0]))
+                result = {"removed": True}
+            elif path == "/api/start":
+                if not self.can_camera(self.server.cameras.default_camera, "control"): return
+                result = self.server.cameras.invoke(self.server.cameras.default_camera, "start", data["profile"])
             elif path == "/api/stop":
+                if not self.can_camera(self.server.cameras.default_camera, "control"): return
                 self.server.cameras.invoke(self.server.cameras.default_camera, "stop"); result = {"active": False}
             elif path == "/api/ptz":
+                if not self.can_camera(self.server.cameras.default_camera, "control"): return
                 result = self.server.cameras.invoke(self.server.cameras.default_camera, "ptz", float(data.get("pan", 0)), float(data.get("tilt", 0)), float(data.get("seconds", 0.2)), bool(data.get("stop", False)))
             else:
                 self.respond(404); return
             self.respond(200, json.dumps(result).encode())
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, sqlite3.IntegrityError):
             self.respond(400, b'{"error":"Request failed; check camera availability and parameters"}')
 
 
@@ -406,8 +686,10 @@ def make_server(camera, web, streams=None, default_camera="cam01"):
     server.cameras = registry
     server.streams = server.cameras.get(default_camera)
     auth_camera = cameras[default_camera]
-    server.username, server.password = auth_camera.c["username"], auth_camera.c["password"]
-    server.networks = [ipaddress.ip_network(n) for n in web["allowed_networks"]]
+    server.users = UserStore(
+        web.get("auth_database", "~/.local/state/yoosee-cam-utils/viewer-users.sqlite3"),
+        auth_camera.c["username"], auth_camera.c["password"], list(cameras), web["allowed_networks"],
+    )
     server.auth_lock = threading.Lock()
     server.failures = defaultdict(deque)
     server.hls_js = asset

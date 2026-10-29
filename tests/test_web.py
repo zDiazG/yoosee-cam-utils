@@ -11,6 +11,7 @@ import unittest
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+import uuid
 from unittest.mock import Mock, patch
 
 from yoosee_cam_utils.web import make_server, Streams, CameraRegistry
@@ -32,10 +33,11 @@ class WebTests(unittest.TestCase):
     def setUp(self):
         asset = self.root / "player.js"
         asset.write_text("test-only player")
-        self.web = dict(bind="127.0.0.1", port=0, allowed_networks=["127.0.0.0/8"], tls_key=str(self.key), tls_cert=str(self.cert), hls_js=str(asset), hls_js_sha256=hashlib.sha256(asset.read_bytes()).hexdigest())
+        self.web = dict(bind="127.0.0.1", port=0, allowed_networks=["127.0.0.0/8"], auth_database=str(self.root / f"viewer-users-{uuid.uuid4().hex}.sqlite3"), tls_key=str(self.key), tls_cert=str(self.cert), hls_js=str(asset), hls_js_sha256=hashlib.sha256(asset.read_bytes()).hexdigest())
         camera = Mock(c={"username": "admin", "password": "test-only-password"})
         self.streams = Mock()
         self.streams.profiles.return_value = [{"token": "profile0"}]
+        self.streams.status.return_value = {"active": False, "profile": None, "playlist": None}
         self.streams.ptz.return_value = {"stop_confirmed": True}
         self.server = make_server(camera, self.web, self.streams)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -46,10 +48,10 @@ class WebTests(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown(); self.server.server_close(); self.thread.join()
 
-    def request(self, path, authorized=False, data=None, extra=None):
+    def request(self, path, authorized=False, data=None, extra=None, username="admin", password="test-only-password"):
         headers = extra or {}
         if authorized:
-            headers["Authorization"] = "Basic " + base64.b64encode(b"admin:test-only-password").decode()
+            headers["Authorization"] = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
         if data is not None:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(self.url + path, headers=headers, data=json.dumps(data).encode() if data is not None else None)
@@ -122,18 +124,29 @@ class WebTests(unittest.TestCase):
         self.streams.media.assert_not_called()
 
     def test_allowlist_rejects_other_network(self):
-        import ipaddress
-        self.server.networks = [ipaddress.ip_network("192.0.2.0/24")]
+        with self.server.users._session() as db:
+            db.execute("DELETE FROM allowed_networks")
+            db.execute("INSERT INTO allowed_networks(cidr) VALUES ('192.0.2.0/24')")
         with self.assertRaises(urllib.error.HTTPError) as e:
             self.request("/", authorized=True)
         self.assertEqual(e.exception.code, 403)
         e.exception.close()
+
+    def test_forwarded_address_header_cannot_bypass_source_allowlist(self):
+        with self.server.users._session() as db:
+            db.execute("DELETE FROM allowed_networks")
+            db.execute("INSERT INTO allowed_networks(cidr) VALUES ('127.0.0.2/32')")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/", authorized=True, extra={"X-Forwarded-For":"127.0.0.2"})
+        self.assertEqual(error.exception.code,403)
+        error.exception.close()
 
     def add_second_camera(self):
         second = Mock()
         second.profiles.return_value = [{"token": "profile-other"}]
         second.status.return_value = {"active": True, "profile": "profile-other", "playlist": "/media/stream-other/index.m3u8"}
         second.start.return_value = second.status.return_value
+        second.ptz.return_value = {"stop_confirmed": True}
         cameras = {"cam01": Mock(c={"name": "First"}), "cam02": Mock(c={"name": "Second"})}
         self.streams.status.return_value = {"active": False, "profile": None, "playlist": None}
         self.server.cameras = CameraRegistry(cameras, streams={"cam01": self.streams, "cam02": second})
@@ -160,6 +173,115 @@ class WebTests(unittest.TestCase):
         self.assertNotIn("password", json.dumps(result))
         second.profiles.assert_not_called()
         self.streams.profiles.assert_not_called()
+
+    def test_admin_can_create_scoped_viewer_without_exposing_hashes(self):
+        data={"username":"viewer1","password":"a-long-test-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":["127.0.0.0/8"]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}) as response:
+            self.assertTrue(json.load(response)["created"])
+        with self.request("/api/admin/users",authorized=True) as response:
+            users=json.load(response)
+        created=next(user for user in users if user["username"]=="viewer1")
+        self.assertEqual(created["role"],"viewer")
+        self.assertEqual(created["cameras"],{"cam01":"viewer"})
+        self.assertNotIn("password",json.dumps(users))
+        self.assertNotIn("password_hash",json.dumps(users))
+        with self.request("/api/cameras",authorized=True,username="viewer1",password="a-long-test-password") as response:
+            self.assertEqual([item["id"] for item in json.load(response)],["cam01"])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/cameras/cam01/start",authorized=True,data={"profile":"profile0"},extra={"X-Camera-Client":"1"},username="viewer1",password="a-long-test-password")
+        self.assertEqual(error.exception.code,403)
+        error.exception.close()
+
+    def test_camera_admin_can_control_only_assigned_camera(self):
+        self.add_second_camera()
+        data={"username":"camadmin","password":"another-long-test-password","role":"camera_admin","camera_permissions":{"cam02":"camera_admin"},"networks":["127.0.0.0/8"]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}):
+            pass
+        with self.request("/api/cameras/cam02/ptz",authorized=True,data={"pan":0.25},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password") as response:
+            self.assertTrue(json.load(response)["stop_confirmed"])
+        with self.assertRaises(urllib.error.HTTPError) as admin_error:
+            self.request("/api/admin/users",authorized=True,username="camadmin",password="another-long-test-password")
+        self.assertEqual(admin_error.exception.code,403)
+        admin_error.exception.close()
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/cameras/cam01/ptz",authorized=True,data={"pan":0.25},extra={"X-Camera-Client":"1"},username="camadmin",password="another-long-test-password")
+        self.assertEqual(error.exception.code,403)
+        error.exception.close()
+
+    def test_camera_viewer_is_not_shown_unassigned_cameras(self):
+        self.add_second_camera()
+        data={"username":"onecam","password":"viewer-access-password","role":"viewer","camera_permissions":{"cam02":"viewer"},"networks":["127.0.0.0/8"]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}):
+            pass
+        with self.request("/api/cameras",authorized=True,username="onecam",password="viewer-access-password") as response:
+            self.assertEqual([item["id"] for item in json.load(response)],["cam02"])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/cameras/cam01/status",authorized=True,username="onecam",password="viewer-access-password")
+        self.assertEqual(error.exception.code,403)
+        error.exception.close()
+
+    def test_user_source_ip_restriction_is_enforced(self):
+        data={"username":"one-source","password":"source-policy-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":["127.0.0.2/32"]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}):
+            pass
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/",authorized=True,username="one-source",password="source-policy-password")
+        self.assertEqual(error.exception.code,403)
+        error.exception.close()
+
+    def test_web_admin_source_restriction_is_enforced(self):
+        data={"username":"restricted-admin","password":"restricted-admin-password","role":"web_admin","camera_permissions":{},"networks":["127.0.0.2/32"]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}):
+            pass
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/admin/users",authorized=True,username="restricted-admin",password="restricted-admin-password")
+        self.assertEqual(error.exception.code,403)
+        error.exception.close()
+
+    def test_admin_can_reset_password_without_regranting_camera_access(self):
+        data={"username":"reset-user","password":"initial-user-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":["127.0.0.0/8"]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}):
+            pass
+        update={"username":"reset-user","password":"replacement-user-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":["127.0.0.0/8"]}
+        with self.request("/api/admin/users/access",authorized=True,data=update,extra={"X-Camera-Client":"1"}) as response:
+            self.assertTrue(json.load(response)["updated"])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/cameras",authorized=True,username="reset-user",password="initial-user-password")
+        self.assertEqual(error.exception.code,401)
+        error.exception.close()
+        with self.request("/api/cameras",authorized=True,username="reset-user",password="replacement-user-password") as response:
+            self.assertEqual([camera["id"] for camera in json.load(response)], ["cam01"])
+
+    def test_global_default_route_is_rejected_for_allowlist(self):
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/admin/networks/add",authorized=True,data={"cidr":"0.0.0.0/0"},extra={"X-Camera-Client":"1"})
+        self.assertEqual(error.exception.code,400)
+        error.exception.close()
+
+    def test_admin_can_disable_account_and_revocation_takes_effect_next_request(self):
+        data={"username":"viewer2","password":"yet-another-long-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":["127.0.0.0/8"]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}):
+            pass
+        with self.request("/api/admin/users/disable",authorized=True,data={"username":"viewer2"},extra={"X-Camera-Client":"1"}) as response:
+            self.assertTrue(json.load(response)["updated"])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/",authorized=True,username="viewer2",password="yet-another-long-password")
+        self.assertEqual(error.exception.code,401)
+        error.exception.close()
+
+    def test_user_network_must_be_within_global_allowlist_and_cannot_lock_out_admin(self):
+        data={"username":"outside","password":"a-different-long-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":["192.0.2.5/32"]}
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"})
+        self.assertEqual(error.exception.code,400)
+        error.exception.close()
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/admin/networks/remove",authorized=True,data={"cidr":"127.0.0.0/8"},extra={"X-Camera-Client":"1"})
+        self.assertEqual(error.exception.code,400)
+        error.exception.close()
+
+    def test_user_database_has_restrictive_permissions(self):
+        self.assertEqual(self.server.users.path.stat().st_mode & 0o777,0o600)
 
     def test_scoped_media_uses_only_requested_camera_and_requires_auth(self):
         second = self.add_second_camera()

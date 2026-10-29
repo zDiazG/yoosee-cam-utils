@@ -48,11 +48,11 @@ duration. Its HLS worker preserves
 the source video and converts audio to AAC for browsers. It stops after two minutes
 without media requests. All viewers share the selected profile.
 
-The viewer now has per-camera stream controls, bulk start/stop and quality actions,
-and a saved browser preference to start Full HD streams. The service supports
-independent configured camera workers. Application accounts and recording are not
-implemented; the viewer still authenticates with the default camera's credentials.
-A real second-camera test remains outstanding.
+The viewer now has independent configured camera workers, per-camera controls, bulk
+start/stop and quality actions, a saved browser preference to start Full HD streams,
+and local viewer accounts with camera grants and source-IP restrictions. The initial
+web administrator uses the default camera login. Recording and a real second-camera
+test remain outstanding.
 
 Both profiles currently emit 15 fps. A reversible ONVIF write and reconnect test
 failed to change the FHD stream to 30 fps. The camera reported its configured limit
