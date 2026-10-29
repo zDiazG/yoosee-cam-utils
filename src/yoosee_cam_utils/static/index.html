@@ -5,50 +5,64 @@
 <title>Camera viewer</title>
 <link rel="stylesheet" href="/style.css">
 <main>
-  <header><div><h1>Camera viewer</h1><p>Local live video. No cloud uploads.</p></div><output id="status" aria-live="polite">Loading cameras...</output></header>
-  <section class="toolbar" aria-label="Camera actions">
-    <label>All cameras <select id="bulk-action"><option value="">Choose action</option><option value="start">Start all</option><option value="stop">Stop all</option></select></label>
-    <button id="apply-action">Apply</button>
-    <label>All-camera quality <select id="bulk-quality"><option value="fhd">Full HD when available</option><option value="light">Lightest available</option></select></label>
-    <button id="apply-quality">Apply quality to all</button>
-    <label class="check"><input id="autostart" type="checkbox"> Start Full HD on page load</label>
+  <header class="masthead">
+    <div><p class="eyebrow">LOCAL CAMERA CONSOLE</p><h1>Camera viewer</h1><p>Live video and local recordings. No cloud uploads.</p></div>
+    <output id="status" class="app-status" aria-live="polite">Loading cameras…</output>
+  </header>
+
+  <section class="toolbar" aria-label="Stream controls">
+    <div class="toolbar-group">
+      <span class="group-label">Streams</span>
+      <button id="start-all" class="button-primary">Start all</button>
+      <button id="stop-all" class="button-secondary">Stop all</button>
+    </div>
+    <div class="toolbar-group">
+      <span class="group-label">Start all at</span>
+      <button id="all-fhd" class="button-quiet">Full HD</button>
+      <button id="all-light" class="button-quiet">Lightest quality</button>
+    </div>
+    <label class="autostart"><input id="autostart" type="checkbox"> Start Full HD on page load</label>
   </section>
-  <details id="admin-panel" hidden>
+
+  <section id="camera-grid" class="camera-grid" aria-label="Configured cameras"></section>
+
+  <section class="ptz-panel" aria-labelledby="ptz-title">
+    <div class="ptz-heading"><div><p class="eyebrow">CAMERA MOVEMENT</p><h2 id="ptz-title">PTZ</h2></div>
+      <label>Selected camera <select id="selected-camera"></select></label>
+    </div>
+    <div class="ptz-body">
+      <div class="ptz-pad" aria-label="Pan and tilt">
+        <span></span><button data-pan="0" data-tilt="0.25" aria-label="Tilt up">↑</button><span></span>
+        <button data-pan="-0.25" data-tilt="0" aria-label="Pan left">←</button><button id="ptz-stop">Stop</button><button data-pan="0.25" data-tilt="0" aria-label="Pan right">→</button>
+        <span></span><button data-pan="0" data-tilt="-0.25" aria-label="Tilt down">↓</button><span></span>
+      </div>
+      <label class="movement-control" for="ptz-duration"><span>Movement per click</span><input id="ptz-duration" type="range" min="0.2" max="1" step="0.1" value="0.8"><output id="ptz-duration-value">0.8 s</output></label>
+      <p class="help-text">Pulse duration is not a calibrated angle. FPS and dimensions are measured from the active source; player delay is measured behind the HLS live edge.</p>
+    </div>
+  </section>
+
+  <details id="admin-panel" class="admin-panel" hidden>
     <summary>Viewer access</summary>
     <section class="admin-section">
       <h2>Add account</h2>
-      <label>Username <input id="new-username" autocomplete="off"></label>
-      <label>Password <input id="new-password" type="password" autocomplete="new-password" minlength="12"></label>
-      <label>Role <select id="new-role"><option value="viewer">Viewer</option><option value="camera_admin">Camera administrator</option><option value="web_admin">Web administrator</option></select></label>
-      <label>Camera IDs <input id="new-cameras" placeholder="cam01,cam02"></label>
-      <label>Allowed IPs/CIDRs <input id="new-networks" placeholder="192.0.2.10/32"></label>
-      <button id="create-user">Create account</button>
-      <button id="cancel-edit" hidden>Cancel edit</button>
-      <p>New passwords need at least 12 characters. Leave the password blank when saving access unless you also want to reset it. Web administrators can manage accounts and source networks. Camera administrators can control assigned cameras. Viewers can watch assigned cameras.</p>
+      <div class="form-grid">
+        <label>Username <input id="new-username" autocomplete="off"></label>
+        <label>Password <input id="new-password" type="password" autocomplete="new-password" minlength="12"></label>
+        <label>Role <select id="new-role"><option value="viewer">Viewer</option><option value="camera_admin">Camera administrator</option><option value="web_admin">Web administrator</option></select></label>
+        <label>Camera IDs <input id="new-cameras" placeholder="cam01,cam02"></label>
+        <label>Allowed IPs/CIDRs <input id="new-networks" placeholder="192.0.2.10/32"></label>
+      </div>
+      <div class="form-actions"><button id="create-user" class="button-primary">Create account</button><button id="cancel-edit" hidden>Cancel edit</button></div>
+      <p class="help-text">Passwords need at least 12 characters. Web administrators manage accounts and source networks. Camera administrators control assigned cameras. Viewers can watch and download clips.</p>
     </section>
-    <section class="admin-section"><h2>Accounts</h2><div id="user-list"></div></section>
+    <section class="admin-section"><h2>Accounts</h2><div id="user-list" class="admin-list"></div></section>
     <section class="admin-section">
       <h2>Allowed source networks</h2>
-      <label>Add IP or CIDR <input id="new-network" placeholder="192.0.2.10/32"></label>
-      <button id="add-network">Add network</button>
-      <div id="network-list"></div>
-      <p>The viewer network list does not change the host firewall. Add a firewall rule separately when a new subnet must reach this service.</p>
+      <div class="form-actions"><label>Add IP or CIDR <input id="new-network" placeholder="192.0.2.10/32"></label><button id="add-network">Add network</button></div>
+      <div id="network-list" class="admin-list"></div>
+      <p class="help-text">This list does not change the host firewall. Add a firewall rule separately when a new subnet must reach this service.</p>
     </section>
   </details>
-  <section id="camera-grid" class="camera-grid" aria-label="Configured cameras"></section>
-  <section class="controls">
-    <h2>PTZ controls</h2>
-    <label>Selected camera <select id="selected-camera"></select></label>
-    <label class="duration" for="ptz-duration">Movement per click</label>
-    <input id="ptz-duration" type="range" min="0.2" max="1" step="0.1" value="0.8">
-    <output id="ptz-duration-value">0.8 s</output>
-    <div class="ptz" aria-label="Pan and tilt">
-      <button data-pan="0" data-tilt="0.25" aria-label="Tilt up">↑</button>
-      <div><button data-pan="-0.25" data-tilt="0" aria-label="Pan left">←</button><button id="ptz-stop">Stop</button><button data-pan="0.25" data-tilt="0" aria-label="Pan right">→</button></div>
-      <button data-pan="0" data-tilt="-0.25" aria-label="Tilt down">↓</button>
-    </div>
-    <p>FPS and dimensions are measured from the current source segment. The delay readout is player delay behind the HLS edge, not camera-to-screen latency.</p>
-  </section>
 </main>
 <script src="/vendor/hls.min.js"></script>
 <script src="/app.js"></script>

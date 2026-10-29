@@ -139,16 +139,17 @@ Schedules survive restart and define timezone/missed-run behavior. External dete
 adapters are planned; object detection itself is not part of the first recording slice.
 A later local motion adapter needs explicit CPU and false-positive acceptance.
 
-Manual clip capture writes to a private spool, verifies the resulting stream with
-ffprobe, computes SHA-256, and stores clip metadata beside the file. The configurable
-spool defaults to 2 GiB with a 5 GiB filesystem free-space reserve; sample config
-defaults recording off. Startup removes incomplete temporary output and orphaned media.
-Manual clips default to 30 seconds and are capped at 300
-seconds. The service allows one clip capture at a time and rejects a request when the
-quota or free-space reserve is reached. Camera administrators can delete saved clips;
-the service has no automatic retention policy. The UI provides authenticated downloads.
-Continuous recording, its bounded
-60-second segments, and oldest-first disposable ring remain future work.
+Manual FHD recording writes to a private spool, verifies each segment with ffprobe,
+computes SHA-256 and stores metadata beside the file. The configurable spool defaults
+to 2 GiB with a 5 GiB filesystem free-space reserve; sample config defaults recording
+off. Startup removes incomplete temporary output and orphaned media. One recording
+session is allowed at a time. Each session is split into clips no longer than 15
+minutes; the default automatic stop is one hour. A per-session custom cap is accepted
+up to 12 hours and is not saved in server config. The quota and free-space reserve can
+stop a session early. Camera administrators can stop sessions and delete saved clips;
+the service has no automatic retention policy. The UI provides authenticated
+downloads. Continuous recording and its oldest-first disposable ring remain future
+work.
 
 Finalize files before enqueueing. SQLite journals queue transitions and recovery.
 A local disposable destination can exercise delivery while real storage is unavailable.
@@ -177,11 +178,12 @@ removes disposable test media after evidence is collected.
 4. Startup and frontend: the browser can save local Full HD autostart. Acceptance still
    needs restart behavior, partial bulk failures and live-lag observation with multiple
    players.
-5. Local recording: manual FHD clips can be started, downloaded and deleted from a
-   camera tile, stay within configured spool/free-space limits and expose verified
-   metadata. Automated tests cover permissions and quota behavior; a real three-second
-   capture was validated and removed. Continuous ring, schedule/event triggers and
-   restart recovery remain future acceptance items.
+5. Local recording: FHD sessions can be started/stopped, split into 15-minute clips,
+   downloaded and deleted from a camera tile, within configured spool/free-space limits
+   and with verified metadata. Automated tests cover session limits, permissions and
+   quota behavior. A real 2.9-second stop produced a 1920×1080/15 fps clip; its
+   downloaded SHA-256 matched metadata and the clip was deleted. Continuous ring,
+   schedule/event triggers and session resume after restart remain future work.
 6. Real storage delivery: verify identity, permissions, interruption/resume, promotion
    and acknowledgement with the storage owner after that destination is ready.
 

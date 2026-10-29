@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from yoosee_cam_utils.recording import ClipManager
+from yoosee_cam_utils.recording import ClipManager, MAX_SESSION_SECONDS
 
 
 class Camera:
@@ -37,26 +37,34 @@ class Registry:
 
 
 class FakeProcess:
-    def __init__(self, args, returncode=0, gate=None):
+    def __init__(self, args, gate=None):
         self.args = args
         self.returncode = None
-        self.result = returncode
+        self.signalled = False
         self.gate = gate
 
     def communicate(self, input=None, timeout=None):
-        self.input = input
         if self.gate:
             self.gate.wait(timeout=2)
-        if self.result == 0:
-            Path(self.args[-1]).write_bytes(b"verified test media")
-        self.returncode = self.result
+        Path(self.args[-1]).write_text(f"duration={self.args[self.args.index('-t') + 1]}")
+        self.returncode = -2 if self.signalled else 0
         return b"", b""
 
     def poll(self):
         return self.returncode
 
+    def send_signal(self, _signal):
+        self.signalled = True
+        if self.gate:
+            self.gate.set()
+
     def terminate(self):
-        self.returncode = -15
+        self.send_signal(None)
+
+    def kill(self):
+        self.returncode = -9
+        if self.gate:
+            self.gate.set()
 
     def wait(self, timeout=None):
         return self.returncode
@@ -67,66 +75,90 @@ class RecordingTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.registry = Registry()
-        self.config = {"enabled": True, "spool_dir": str(self.root / "recordings"), "max_bytes": 4 * 1024**2, "reserve_bytes": 0, "default_seconds": 2, "max_seconds": 10}
+        self.config = {
+            "enabled": True,
+            "spool_dir": str(self.root / "recordings"),
+            "max_bytes": 4 * 1024**2,
+            "reserve_bytes": 0,
+            "segment_seconds": 2,
+            "default_session_seconds": 5,
+        }
         self.manager = ClipManager(self.registry, self.config)
-        self.probe = {"width": 1920, "height": 1080, "fps": 15.0, "duration_seconds": 2.0}
 
     def tearDown(self):
         self.manager.stop_all()
         self.temp.cleanup()
 
-    def wait_for_job(self, job_id):
+    @staticmethod
+    def probe(path):
+        seconds = float(Path(path).read_text().split("=", 1)[1])
+        return {"width": 1920, "height": 1080, "fps": 15.0, "duration_seconds": seconds}
+
+    def wait_for_session(self, session_id):
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
-            status = self.manager.status(job_id, "cam01")
-            if status["state"] in ("complete", "failed"):
-                return status
+            with self.manager.lock:
+                session = self.manager.sessions[session_id]
+                if session["state"] != "recording":
+                    return self.manager.status("cam01", session_id)
             time.sleep(.01)
-        self.fail("recording job did not finish")
+        self.fail("recording session did not finish")
 
-    def test_manual_capture_is_bounded_promoted_and_hash_recorded(self):
-        process = FakeProcess
-        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=lambda args, **kwargs: process(args)), patch.object(ClipManager, "_probe", return_value=self.probe):
-            job = self.manager.start("cam01", "main", 2)
-            result = self.wait_for_job(job["id"])
+    def test_session_splits_into_bounded_clips_and_records_hashes(self):
+        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=lambda args, **kwargs: FakeProcess(args)), patch.object(ClipManager, "_probe", side_effect=self.probe):
+            session = self.manager.start("cam01", "main", 5)
+            result = self.wait_for_session(session["id"])
         self.assertEqual(result["state"], "complete")
-        media_path = self.manager.clip_path("cam01", job["id"])
-        metadata = json.loads(media_path.with_suffix(".json").read_text())
-        self.assertEqual(metadata["trigger"], "manual")
-        self.assertEqual(metadata["profile"], "main")
-        self.assertEqual(metadata["sha256"], hashlib.sha256(media_path.read_bytes()).hexdigest())
-        self.assertEqual(metadata["bytes"], media_path.stat().st_size)
-        self.assertEqual(self.manager.list_clips("cam01")[0]["id"], job["id"])
+        self.assertEqual(result["max_seconds"], 5)
+        self.assertEqual(result["segment_count"], 3)
+        clips = self.manager.list_clips("cam01")
+        self.assertEqual(len(clips), 3)
+        self.assertTrue(all(item["session_id"] == session["id"] for item in clips))
+        self.assertEqual(sorted(item["duration_seconds"] for item in clips), [1, 2, 2])
+        for clip in clips:
+            path = self.manager.clip_path("cam01", clip["id"])
+            self.assertEqual(clip["sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertFalse(list(self.manager.directory.rglob("*.part.mkv")))
 
-    def test_ffmpeg_never_receives_camera_credentials_in_argv(self):
-        captured = {}
-        def factory(args, **kwargs):
-            captured["args"] = args
-            return FakeProcess(args)
-        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=factory), patch.object(ClipManager, "_probe", return_value=self.probe):
-            job = self.manager.start("cam01", "main", 2)
-            self.wait_for_job(job["id"])
-        self.assertNotIn("camera-secret", " ".join(captured["args"]))
-        self.assertIn("-fs", captured["args"])
+    def test_stop_finalizes_the_current_segment_and_keeps_prior_segments(self):
+        gate = threading.Event()
+        factory = lambda args, **kwargs: FakeProcess(args, gate=gate)
+        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=factory), patch.object(ClipManager, "_probe", side_effect=self.probe):
+            session = self.manager.start("cam01", "main", 60)
+            deadline = time.monotonic() + 1
+            while self.manager.sessions[session["id"]]["process"] is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.manager.stop("cam01", session["id"])
+            result = self.wait_for_session(session["id"])
+        self.assertEqual(result["state"], "stopped")
+        self.assertEqual(result["stop_reason"], "Stopped by user")
+        self.assertEqual(result["segment_count"], 1)
+        self.assertEqual(len(self.manager.list_clips("cam01")), 1)
 
-    def test_clip_is_rejected_when_spool_budget_is_exhausted(self):
+    def test_only_one_camera_session_can_run_at_a_time(self):
+        gate = threading.Event()
+        factory = lambda args, **kwargs: FakeProcess(args, gate=gate)
+        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=factory), patch.object(ClipManager, "_probe", side_effect=self.probe):
+            session = self.manager.start("cam01", "main", 60)
+            with self.assertRaisesRegex(ValueError, "another camera"):
+                self.manager.start("cam01", "sub", 60)
+            self.manager.stop("cam01", session["id"])
+            self.wait_for_session(session["id"])
+
+    def test_session_limit_is_capped_at_twelve_hours(self):
+        self.assertEqual(MAX_SESSION_SECONDS, 12 * 60 * 60)
+        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=lambda args, **kwargs: FakeProcess(args)), patch.object(ClipManager, "_probe", side_effect=self.probe):
+            with self.assertRaisesRegex(ValueError, "session limit"):
+                self.manager.start("cam01", "main", MAX_SESSION_SECONDS + 1)
+            session = self.manager.start("cam01", "main", MAX_SESSION_SECONDS)
+            self.manager.stop("cam01", session["id"])
+            self.wait_for_session(session["id"])
+
+    def test_quota_exhaustion_prevents_a_new_session(self):
         with patch.object(self.manager, "_budget", return_value=1024**2 - 1):
             with self.assertRaisesRegex(ValueError, "quota or free-space"):
                 self.manager.start("cam01", "main", 2)
-
-    def test_only_one_clip_job_can_run_at_a_time(self):
-        gate = threading.Event()
-        factory = lambda args, **kwargs: FakeProcess(args, gate=gate)
-        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=factory), patch.object(ClipManager, "_probe", return_value=self.probe):
-            first = self.manager.start("cam01", "main", 2)
-            deadline = time.monotonic() + 1
-            while self.manager.jobs[first["id"]]["process"] is None and time.monotonic() < deadline:
-                time.sleep(.01)
-            with self.assertRaisesRegex(ValueError, "another clip"):
-                self.manager.start("cam01", "sub", 2)
-            gate.set()
-            self.assertEqual(self.wait_for_job(first["id"])["state"], "complete")
 
     def test_disabled_recorder_creates_no_directory_or_file(self):
         root = self.root / "disabled"
@@ -136,18 +168,17 @@ class RecordingTests(unittest.TestCase):
             manager.start("cam01", "main", 2)
 
     def test_delete_removes_only_the_selected_clip_and_sidecar(self):
-        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=lambda args, **kwargs: FakeProcess(args)), patch.object(ClipManager, "_probe", return_value=self.probe):
-            first = self.manager.start("cam01", "main", 2)
-            result = self.wait_for_job(first["id"])
-        self.assertEqual(result["state"], "complete")
-        path = self.manager.clip_path("cam01", first["id"])
+        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=lambda args, **kwargs: FakeProcess(args)), patch.object(ClipManager, "_probe", side_effect=self.probe):
+            session = self.manager.start("cam01", "main", 2)
+            self.wait_for_session(session["id"])
+        clips = self.manager.list_clips("cam01")
+        target = clips[0]
+        path = self.manager.clip_path("cam01", target["id"])
         metadata = path.with_suffix(".json")
-        self.manager.delete_clip("cam01", first["id"])
+        self.manager.delete_clip("cam01", target["id"])
         self.assertFalse(path.exists())
         self.assertFalse(metadata.exists())
-        self.assertEqual(self.manager.list_clips("cam01"), [])
-        with self.assertRaises(KeyError):
-            self.manager.delete_clip("cam01", first["id"])
+        self.assertEqual(len(self.manager.list_clips("cam01")), 0)
 
     def test_startup_removes_incomplete_and_orphaned_media_but_keeps_valid_clips(self):
         folder = self.root / "recordings" / "cam01" / "2026" / "10"

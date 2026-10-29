@@ -22,7 +22,7 @@ import threading
 import time
 import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 import uuid
 
 from .cli import Camera, load_config, media_input, redact, PTZ, SCHEMA
@@ -597,6 +597,15 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(200, json.dumps(self.server.clips.list_clips(camera_id)).encode())
                 else:
                     self.respond(200, json.dumps(self.server.clips.status(parts[5], camera_id)).encode())
+            elif re.fullmatch(r"/api/cameras/[^/]+/recording", path):
+                camera_id = path.split("/")[3]
+                try:
+                    self.server.cameras.get(camera_id)
+                except KeyError:
+                    self.respond(404); return
+                if not self.can_camera(camera_id, "view"): return
+                session_id = parse_qs(urlsplit(self.path).query).get("session_id", [None])[0]
+                self.respond(200, json.dumps(self.server.clips.status(camera_id, session_id)).encode())
             elif re.fullmatch(r"/recordings/[^/]+/[a-f0-9]{32}", path):
                 _, _, camera_id, clip_id = path.split("/")
                 if not self.can_camera(camera_id, "view"): return
@@ -651,7 +660,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.cameras.invoke(camera_id, "stop"); result = {"active": False}
                 else:
                     result = self.server.cameras.invoke(camera_id, "ptz", float(data.get("pan", 0)), float(data.get("tilt", 0)), float(data.get("seconds", 0.2)), bool(data.get("stop", False)))
-            elif re.fullmatch(r"/api/cameras/[^/]+/clips(?:/[a-f0-9]{32}/delete)?", path):
+            elif re.fullmatch(r"/api/cameras/[^/]+/clips/[a-f0-9]{32}/delete", path):
                 parts = path.split("/")
                 camera_id = parts[3]
                 try:
@@ -660,10 +669,24 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(404); return
                 if not self.can_camera(camera_id, "record"): return
                 try:
-                    if len(parts) == 7 and parts[6] == "delete":
-                        self.server.clips.delete_clip(camera_id, parts[5])
-                        self.respond(200, b'{"deleted":true}'); return
-                    result = self.server.clips.start(camera_id, data.get("profile"), data.get("seconds"))
+                    self.server.clips.delete_clip(camera_id, parts[5])
+                    self.respond(200, b'{"deleted":true}'); return
+                except (ValueError, OSError) as error:
+                    self.respond(409, json.dumps({"error": str(error)}).encode()); return
+                except KeyError:
+                    self.respond(404); return
+            elif re.fullmatch(r"/api/cameras/[^/]+/recording/(start|stop)", path):
+                camera_id, operation = path.split("/")[3], path.rsplit("/", 1)[1]
+                try:
+                    self.server.cameras.get(camera_id)
+                except KeyError:
+                    self.respond(404); return
+                if not self.can_camera(camera_id, "record"): return
+                try:
+                    if operation == "start":
+                        result = self.server.clips.start(camera_id, data.get("profile"), data.get("max_seconds"))
+                    else:
+                        result = self.server.clips.stop(camera_id, data.get("session_id"))
                 except (ValueError, OSError) as error:
                     self.respond(409, json.dumps({"error": str(error)}).encode()); return
                 except KeyError:
@@ -758,7 +781,7 @@ def main():
     web = config["web"]
     if a.dry_run:
         recording = config.get("recording", {})
-        print(json.dumps({"bind": web["bind"], "port": web["port"], "tls": True, "auth": "server-side basic", "allowed_networks": web["allowed_networks"], "cameras": camera_ids, "default_camera": default_camera, "manual_recording": {"enabled": bool(recording.get("enabled", False)), "max_bytes": int(recording.get("max_bytes", 2 * 1024**3)), "reserve_bytes": int(recording.get("reserve_bytes", 5 * 1024**3))}})); return
+        print(json.dumps({"bind": web["bind"], "port": web["port"], "tls": True, "auth": "server-side basic", "allowed_networks": web["allowed_networks"], "cameras": camera_ids, "default_camera": default_camera, "manual_recording": {"enabled": bool(recording.get("enabled", False)), "max_bytes": int(recording.get("max_bytes", 2 * 1024**3)), "reserve_bytes": int(recording.get("reserve_bytes", 5 * 1024**3)), "segment_seconds": int(recording.get("segment_seconds", 900)), "default_session_seconds": int(recording.get("default_session_seconds", 3600))}})); return
     server = make_server(cameras, web, default_camera=default_camera, recording=config.get("recording", {}))
     def reap():
         while True:
