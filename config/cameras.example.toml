@@ -6,3 +6,14 @@ onvif_port = 5000
 rtsp_port = 554
 username_env = "CAM01_NVR_USERNAME"
 password_env = "CAM01_NVR_PASSWORD"
+
+# Optional HTTPS viewer. Generate your own TLS certificate and private key.
+[web]
+bind = "127.0.0.1"
+port = 8780
+allowed_networks = ["127.0.0.0/8"]
+tls_cert = "~/.config/yoosee-cam-utils/tls/server.crt"
+tls_key = "~/.config/yoosee-cam-utils/tls/server.key"
+cache_dir = "~/.cache/yoosee-cam-utils/hls-runtime"
+hls_js = "~/.cache/yoosee-cam-utils/hls-v1.7.4/hls.min.js"
+hls_js_sha256 = "cfc70cc9e9fc63d071919e087670abc760c8fd1bc889b88588026e4d22193bbe"

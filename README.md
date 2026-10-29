@@ -27,7 +27,7 @@ ssh YOUR_HOST 'cd /path/to/checkout && ./scripts/yoosee-cam stream --profile PRO
 ```
 
 Use `stream --seconds 10` for a bounded check. Stop live viewing with Ctrl+C or close
-the player. No HTTP listener or unauthenticated camera dashboard is created.
+the player. CLI commands do not start a network listener.
 
 PTZ movement is a dry run unless `--execute` is added. Movement requests include
 a timeout and are followed by Stop, with zero-velocity fallback for limited firmware.
@@ -40,7 +40,11 @@ when a camera rejects TCP interleaving. Actual stream metadata can differ from O
 
 FFmpeg credentials travel through a stdin playlist instead of process arguments.
 Captured errors redact the configured password. Media and private configuration
-are ignored by Git. No web service, cloud upload, firmware change or continuous
-recorder is installed.
+are ignored by Git. No cloud upload, firmware change or continuous recorder is installed.
+
+An optional [HTTPS viewer](docs/web-viewer.md) provides server authentication,
+video/audio, profile selection and short PTZ movements. Its HLS worker preserves
+the source video and converts audio to AAC for browsers. It stops after two minutes
+without media requests. All viewers share the selected profile.
 
 Run local checks with `PYTHONPATH=src python3 -m unittest discover -s tests`.

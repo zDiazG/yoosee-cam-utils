@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Câmera local</title><link rel="stylesheet" href="/style.css">
+<main><h1>Câmera local</h1><p>Vídeo local com alguns segundos de atraso. Nenhum upload para nuvem.</p>
+<section><label>Qualidade <select id="profiles"></select></label><button id="start">Abrir vídeo</button><button id="stop">Parar vídeo</button></section>
+<video id="video" controls autoplay muted playsinline></video>
+<section class="ptz"><button data-pan="0" data-tilt="0.25">↑</button><div><button data-pan="-0.25" data-tilt="0">←</button><button id="ptz-stop">Parar PTZ</button><button data-pan="0.25" data-tilt="0">→</button></div><button data-pan="0" data-tilt="-0.25">↓</button></section>
+<p>Cada clique solicita um movimento curto. Use os controles do vídeo para áudio e tela cheia.</p><output id="status" aria-live="polite">Carregando perfis…</output>
+</main><script src="/vendor/hls.min.js"></script><script src="/app.js"></script></html>
