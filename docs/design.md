@@ -139,7 +139,12 @@ revocation, preserved accounts, rejected forged forwarding headers, and authenti
 live/PTZ/clip playback through the private URL. Deployment backs up the account store
 and ingress configuration; rollback restores them and invalidates issued sessions.
 
-## Planned resource reductions
+## Resource use and planned reductions
+
+The managed glibc service limits allocator arenas to two and maps allocations above
+1 MiB so large scrypt workspaces are released after request threads finish. CSS/JavaScript have public ETag revalidation and
+can stay cached after login expires. These files contain no camera or account data;
+private APIs and media remain authenticated and uncached.
 
 Video decoding and saved-clip playback already run in the client browser. Keep source
 video copying and one shared camera ingest for live viewers. Password hashing on every

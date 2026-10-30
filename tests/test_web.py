@@ -64,6 +64,26 @@ class WebTests(unittest.TestCase):
         self.assertEqual(e.exception.code, 401)
         e.exception.close()
 
+    def test_public_assets_revalidate_without_password_hashing(self):
+        for path in ("/app.js", "/style.css", "/vendor/hls.min.js"):
+            with patch.object(self.server.users, "authenticate", side_effect=AssertionError("asset must not authenticate")):
+                with self.request(path) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertTrue(response.read())
+                    etag = response.headers["ETag"]
+                    self.assertIn("public", response.headers["Cache-Control"])
+                with self.assertRaises(urllib.error.HTTPError) as result:
+                    self.request(path, extra={"If-None-Match": etag})
+                self.assertEqual(result.exception.code, 304)
+                self.assertEqual(result.exception.read(), b"")
+                result.exception.close()
+        # API content remains private and uncached.
+        with self.assertRaises(urllib.error.HTTPError) as result:
+            self.request("/api/cameras")
+        self.assertEqual(result.exception.code, 401)
+        self.assertEqual(result.exception.headers["Cache-Control"], "no-store")
+        result.exception.close()
+
     def test_fake_frontend_cookie_does_not_bypass_auth(self):
         with self.assertRaises(urllib.error.HTTPError) as e:
             self.request("/api/profiles", extra={"Cookie": "admin=true; authenticated=1"})

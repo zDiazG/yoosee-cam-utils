@@ -8,6 +8,10 @@ No credential is embedded in JavaScript. Invalid logins are rate limited; networ
 sources must also match the configured allowlist. PTZ POSTs require a custom header
 and reject cross-origin browser requests.
 
+CSS and JavaScript are public application assets with ETag revalidation. Browsers
+may retain them across login expiry; cached code grants no access to APIs or media.
+Pages, APIs and media remain authenticated with `Cache-Control: no-store`.
+
 ## Preparation
 
 1. Run `python3 scripts/cache-web-assets.py --apply`. This caches hls.js 1.7.4,
@@ -192,6 +196,10 @@ The unit runs as the current user, with a private umask and a scoped runtime
 directory. It requires that user's systemd manager; enable lingering separately if
 the service must start without an interactive login. No system-wide firewall,
 network, reverse-proxy or authentication configuration is edited by the installer.
+The managed unit sets `MALLOC_ARENA_MAX=2` and `MALLOC_MMAP_THRESHOLD_=1048576`
+on glibc systems. It bounds allocator arenas and releases large password-hashing
+workspaces through mapped allocations, without weakening password hashing. Other
+allocators may ignore these environment settings.
 Restart the user service after changing its private configuration or updating code.
 
 Stop and disable the viewer with:

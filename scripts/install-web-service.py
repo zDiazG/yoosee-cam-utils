@@ -27,6 +27,8 @@ Type=simple
 WorkingDirectory={str(root).replace('%', '%%')}
 ExecStart={quote(root / "scripts/yoosee-web")} --config {quote(config)}
 Environment=PYTHONUNBUFFERED=1
+Environment=MALLOC_ARENA_MAX=2
+Environment=MALLOC_MMAP_THRESHOLD_=1048576
 RuntimeDirectory=yoosee-cam-utils
 UMask=0077
 Nice=10

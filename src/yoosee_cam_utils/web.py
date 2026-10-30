@@ -726,11 +726,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def respond(self, code, body=b"", content_type="application/json", challenge=False, extra_headers=()):
+    def respond(self, code, body=b"", content_type="application/json", challenge=False, extra_headers=(), cache_control="no-store"):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        if code != 304:
+            self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", cache_control)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; media-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'")
         if challenge:
@@ -872,15 +873,30 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):
-        if not self.authorized(): return
         path = urlsplit(self.path).path
+        # These files contain application code only, never account or camera data.
+        # Keep them cacheable even when a user's authentication expires.
+        static = {"/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
+        if path in static or path == "/vendor/hls.min.js":
+            try:
+                if path == "/vendor/hls.min.js":
+                    asset, mime = self.server.hls_js, "text/javascript"
+                else:
+                    name, mime = static[path]
+                    asset = Path(__file__).parent / "static" / name
+                body = asset.read_bytes()
+                etag = '"' + hashlib.sha256(body).hexdigest() + '"'
+                cached = self.headers.get("If-None-Match") in (etag, "*")
+                self.respond(304 if cached else 200, b"" if cached else body, mime,
+                             extra_headers=(("ETag", etag),),
+                             cache_control="public, max-age=0, must-revalidate")
+            except OSError:
+                self.respond(404)
+            return
+        if not self.authorized(): return
         try:
-            static = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
-            if path in static:
-                name, mime = static[path]
-                self.respond(200, (Path(__file__).parent / "static" / name).read_bytes(), mime)
-            elif path == "/vendor/hls.min.js":
-                self.respond(200, self.server.hls_js.read_bytes(), "text/javascript")
+            if path == "/":
+                self.respond(200, (Path(__file__).parent / "static" / "index.html").read_bytes(), "text/html; charset=utf-8")
             elif path == "/api/cameras":
                 visible = [item | {"can_control": self.server.users.can(self.auth_user, item["id"], "control")} for item in self.server.cameras.summary() if self.server.users.can(self.auth_user, item["id"], "view")]
                 recording_enabled = bool(getattr(self.server.clips, "enabled", False))

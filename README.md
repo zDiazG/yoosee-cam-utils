@@ -71,6 +71,11 @@ shows browser frame throughput separately from the source-reported rate.
 See [the viewer notes](docs/web-viewer.md) and [design](docs/design.md) for evidence
 and remaining acceptance work.
 
+Static CSS and JavaScript use browser caching with ETag revalidation, independently
+of login. Camera data, APIs, pages and media stay authenticated and uncached. The
+managed Linux service limits allocator arenas to reduce retained authentication
+workspace memory. Video decoding and clip playback run in the browser.
+
 The next planned web batch introduces Watchpost branding, private named access and
 controlled login sessions. These are requirements in [the design](docs/design.md),
 not deployed capabilities.
