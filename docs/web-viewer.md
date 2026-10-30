@@ -122,8 +122,8 @@ administrators can do so for every camera. Hidden clips are omitted from normal 
 and playback and appear only in the administrators' Hidden view.
 
 The active store is the local private spool. Clip metadata records a stable clip ID,
-storage backend and replication state so a future Lumber delivery adapter can copy
-verified files and keep the local copy until remote acknowledgement. No Lumber
+storage backend and replication state so a future remote delivery adapter can copy
+verified files and keep the local copy until remote acknowledgement. No remote
 replication or fallback transfer is active yet. There is no automatic retention
 policy, 24/7 ring, motion trigger or schedule in this release. Each recording adds an
 RTSP session and may affect live viewing on cameras with a low session limit; verify
@@ -171,6 +171,13 @@ the application; the host firewall remains a separate filter. Forwarded client-I
 headers are ignored, so a tunnel or reverse proxy needs an explicit trusted-proxy
 design before it can preserve per-user source restrictions.
 All project text and UI strings must remain English.
+
+## Planned private access and sessions
+
+The next batch will use Watchpost branding and a named private service URL. Cookie
+sessions, a 60-minute idle limit, a three-hour normal session cap and an explicitly
+granted watcher capability are specified in [the design](design.md). The current
+runtime still uses Basic authentication and has no application session timeout.
 
 ## User service
 

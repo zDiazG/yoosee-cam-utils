@@ -101,8 +101,54 @@ unless the peer is an explicitly trusted proxy. For a future reverse proxy, enfo
 an exact public origin and validate its forwarded-address chain. Tailscale/WireGuard
 supply reachability, not automatic application administrator rights. Cloudflare
 Access headers become identity only through a configured validation adapter.
-Prepare configuration boundaries now; do not deploy or expose a tunnel in this slice.
-Inspect existing private ingress before selecting a tunnel route or hostname.
+The next private-ingress batch must preserve source restrictions through an explicitly
+trusted proxy and retain application authentication. Inspect the existing private
+ingress and Service allowance before provisioning.
+
+## Planned Watchpost access and sessions
+
+Watchpost is the selected name for the web application. Branding and the private
+service hostname are pending implementation; existing CLI/package names remain valid.
+Use a named private Tailscale Service behind the established ingress when available.
+Keep deployment addresses and credentials in private configuration. Validate upstream
+TLS with the service certificate, stream responses without proxy buffering, and trust
+forwarded client addresses only from configured proxy peers. The proxy must sanitize
+incoming forwarding headers; direct callers cannot choose their source address.
+Tailscale reachability does not grant application permissions.
+
+Replace browser Basic authentication with a login page and opaque server-side session
+tokens in Secure, HttpOnly, SameSite cookies. Keep password verification at login,
+rate-limit failed logins, validate mutation origins/CSRF tokens, and support logout.
+Existing account hashes and camera grants must survive the migration. Account disable,
+password changes and access revocation must terminate relevant sessions and streams.
+
+Default accounts expire after 60 minutes without human interaction or after three
+hours from login, whichever comes first. Media downloads and background polling do
+not extend idle time. A bounded heartbeat reports recent input and page visibility;
+server time controls expiration. A resumed or suspended page checks its session before
+reconnecting and prompts for authentication when the session is expired or uncertain.
+
+A separately granted `watcher` account capability permits unattended monitoring
+without idle or absolute timeout. It grants no camera or administrator access and is
+not implicitly selected by All roles. Administrators can revoke it. Logout, password
+changes, account disable and service restart still invalidate the session. A browser
+restart requires login; cross-restart session persistence is outside this batch.
+
+Acceptance includes accelerated expiry checks, watcher monitoring, logout and live
+revocation, preserved accounts, rejected forged forwarding headers, and authenticated
+live/PTZ/clip playback through the private URL. Deployment backs up the account store
+and ingress configuration; rollback restores them and invalidates issued sessions.
+
+## Planned resource reductions
+
+Video decoding and saved-clip playback already run in the client browser. Keep source
+video copying and one shared camera ingest for live viewers. Password hashing on every
+HTTP request and duplicate AAC encoding for live/HLS are avoidable server work.
+Measure before and after removing repeated password verification and consolidating
+AAC encoding or making the HLS compatibility output demand-driven. Preserve the
+working MediaSource transport and browser fallback. Do not move camera credentials
+or direct RTSP access into browsers. Validate CPU, memory, startup, buffered media and
+revocation with one viewer and multiple viewers before claiming a reduction.
 
 ## Frontend direction
 
@@ -159,8 +205,9 @@ A later local motion adapter needs explicit CPU and false-positive acceptance.
 Manual FHD recording writes to a private spool, copies video into MP4 without
 transcoding, verifies each segment with ffprobe, computes SHA-256 and stores metadata
 beside the file. Each segment gets a random UUID stored in its filename and sidecar;
-deletion does not rewind an allocator, and later WhiteDwarf and Lumber writers do
-not need to coordinate counters or maintain an ID database. The safe display filename contains camera, weekday, timestamp
+deletion does not rewind an allocator, and independent writers do not need to
+coordinate counters or maintain an ID database. The safe display filename contains
+camera, weekday, timestamp
 and resolution. Near-identical overlapping clips receive their own short UUID suffix
 in the UI, computed from sidecar metadata without persistent duplicate records. The
 configurable spool defaults to 2 GiB with a
@@ -175,7 +222,7 @@ administrators can hide or delete clips for cameras they administer; web adminis
 can do so globally. The Media page uses browser playback and HTTP range reads rather
 than server-side playback transcoding. Per-camera recent lists cover the previous
 24 hours and cap at ten clips. The current filesystem spool is the only active store.
-Stable storage metadata prepares for a future verified Lumber replica, but no remote
+Stable storage metadata prepares for a future verified remote replica, but no remote
 transfer is implemented. Continuous recording and its oldest-first disposable ring
 remain future work.
 
@@ -212,7 +259,7 @@ removes disposable test media after evidence is collected.
    automated coverage. A real 2.9-second clip was previously captured and its SHA-256
    matched metadata. Real browser playback of this new MP4 path and simultaneous
    recordings still need runtime acceptance. Continuous ring, schedule/event triggers,
-   retention and Lumber delivery remain future work.
+   retention and remote delivery remain future work.
 6. Real storage delivery: verify identity, permissions, interruption/resume, promotion
    and acknowledgement with the storage owner after that destination is ready.
 
