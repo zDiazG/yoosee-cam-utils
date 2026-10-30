@@ -95,6 +95,10 @@ function detach(camera) {
   camera.video.pause();
   camera.video.removeAttribute('src');
   camera.video.load();
+  camera.video.hidden = true;
+  camera.placeholder.hidden = false;
+  camera.source.hidden = true;
+  camera.latency.hidden = true;
   if (camera.objectURL) URL.revokeObjectURL(camera.objectURL);
   camera.objectURL = null;
   camera.liveFPS = null;
@@ -191,6 +195,10 @@ async function attachLive(camera, stream, generation) {
 
 function attach(camera, stream) {
   detach(camera);
+  camera.video.hidden = false;
+  camera.placeholder.hidden = true;
+  camera.source.hidden = false;
+  camera.latency.hidden = false;
   const generation = ++camera.generation;
   if (!stream.source) refreshSource(camera, generation);
   if (stream.live && window.MediaSource && MediaSource.isTypeSupported(stream.mime)) {
@@ -261,12 +269,19 @@ function renderCamera(item) {
   video.autoplay = true;
   video.muted = true;
   video.playsInline = true;
+  video.hidden = !item.active;
+  const placeholder = document.createElement('div');
+  placeholder.className = 'stream-placeholder';
+  placeholder.textContent = 'Stream stopped · Start stream to view live video.';
+  placeholder.hidden = Boolean(item.active);
   const source = document.createElement('p');
   source.className = 'source-info';
   source.textContent = 'Source: measuring…';
+  source.hidden = !item.active;
   const latency = document.createElement('p');
   latency.className = 'latency';
   latency.textContent = 'Player delay: measuring…';
+  latency.hidden = !item.active;
 
   const controls = document.createElement('div');
   controls.className = 'stream-controls';
@@ -382,9 +397,9 @@ function renderCamera(item) {
   clips.className = 'clip-list';
   saved.append(savedHeading, clips);
 
-  card.append(heading, video, source, latency, controls, ptz, recording, saved);
+  card.append(heading, video, placeholder, source, latency, controls, ptz, recording, saved);
   grid.append(card);
-  const camera = { ...item, card, quality, streamToggle: cameraStreamToggle, state, video, source, latency, ptz, recordingState, recordingInfo, recording, limit, customLabel, customMinutes, record, savedHeading, clips, profiles: [], player: null, timer: null, generation: 0, recordingSession: null, sessionId: sessionStorage.getItem(`yoosee.recording-session:${item.id}`), lastSegmentCount: -1, ptzBusy: false };
+  const camera = { ...item, card, quality, streamToggle: cameraStreamToggle, state, video, placeholder, source, latency, ptz, recordingState, recordingInfo, recording, limit, customLabel, customMinutes, record, savedHeading, clips, profiles: [], player: null, timer: null, generation: 0, recordingSession: null, sessionId: sessionStorage.getItem(`yoosee.recording-session:${item.id}`), lastSegmentCount: -1, ptzBusy: false };
   cameras.set(item.id, camera);
   quality.onchange = () => startCamera(camera, quality.value);
   streamToggle.onclick = () => camera.active ? stopCamera(camera) : startCamera(camera, quality.value || preferredProfile(camera, 'fhd'));
