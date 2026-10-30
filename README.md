@@ -1,4 +1,4 @@
-# Yoosee camera utilities
+# Camera utilities
 
 Small Python CLI for ONVIF device/profile inspection, RTSP video and audio checks,
 short recordings without transcoding, and bounded PTZ commands.
@@ -60,8 +60,8 @@ session limit and a maximum of 12 hours. A bounded private spool stops recording
 its quota or free-space reserve is reached. The Media page plays clips in the browser.
 Owners can delete their own clips; camera and web administrators can hide or delete
 clips from other users. Camera tiles show the ten latest visible clips from the last
-24 hours. Lumber replication, continuous recording, automatic retention/delivery, and
-a real second-camera test remain outstanding.
+24 hours. Remote storage replication, continuous recording, automatic retention and
+delivery, and a real second-camera test remain outstanding.
 
 Earlier checks reported 15 fps on both profiles. A later timestamp count measured
 10.0 fps on FHD and 10.1 fps on the lightweight profile despite the stream reporting
@@ -70,5 +70,9 @@ encoder configuration was restored. No 60 fps support was found. MediaSource pla
 shows browser frame throughput separately from the source-reported rate.
 See [the viewer notes](docs/web-viewer.md) and [design](docs/design.md) for evidence
 and remaining acceptance work.
+
+The next planned web batch introduces Watchpost branding, private named access and
+controlled login sessions. These are requirements in [the design](docs/design.md),
+not deployed capabilities.
 
 Run local checks with `PYTHONPATH=src python3 -m unittest discover -s tests`.
