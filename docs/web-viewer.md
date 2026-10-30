@@ -65,8 +65,10 @@ account. The application allowlist does not change the host firewall; update tha
 separately when a new subnet must reach the service. The server checks the TCP peer
 address. Source NAT therefore makes several clients appear as their gateway and removes
 per-client IP isolation; preserve source addresses or use a separately trusted ingress
-before relying on per-user IP restrictions. Forwarded headers are not trusted.
-Default-route CIDRs are rejected.
+before relying on per-user IP restrictions. Forwarded client addresses are accepted
+only from a specifically configured trusted proxy. Configure exact `web.allowed_origins`
+HTTPS origins when that proxy changes the backend `Host`; this preserves CSRF checks
+without accepting arbitrary origins. Default-route CIDRs are rejected.
 
 Live playback prefers fragmented MP4 through MediaSource in compatible browsers.
 FFmpeg copies H.264 video and encodes audio to AAC once, sharing that encoded audio
@@ -176,8 +178,8 @@ coverage, but a real second camera remains untested. The source allowlist applie
 the application; the host firewall remains a separate filter. Forwarded client-IP
 headers are ignored unless the connection peer is configured as a trusted proxy. The
 forwarded-address handler accepts exactly one address from such a peer; forged headers
-from direct clients are ignored. The named Tailscale Service route is not yet enabled.
-All project text and UI strings must remain English.
+from direct clients are ignored. The private Tailscale Service is enabled. All project
+text and UI strings must remain English.
 
 ## Login sessions
 
@@ -189,9 +191,11 @@ server-side; a service restart requires a new login. Account access changes revo
 affected sessions. Mutations require the exact HTTPS origin and a per-session CSRF token.
 
 The loopback-only Caddy backend on OPS1 trusts the app certificate. The named private
-Tailscale Service is defined, its OPS1 host is approved, and HTTPS is advertised.
-The tailnet route returns the login page and rejects unauthenticated API status checks.
-Credentialed login, media and PTZ through that route still need regular-use verification.
+Tailscale Service is defined, its OPS1 host is approved, and HTTPS is advertised. The
+runtime config explicitly allows the exact private HTTPS origin because the service
+proxy can change the backend `Host`. Keep that endpoint in the application host's
+ignored local config, not tracked files. Credentialed login is verified; media and PTZ
+through the route still need an end-to-end check.
 
 ## User service
 

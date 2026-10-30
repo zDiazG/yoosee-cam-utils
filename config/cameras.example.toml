@@ -12,6 +12,7 @@ password_env = "CAM01_NVR_PASSWORD"
 bind = "127.0.0.1"
 port = 8780
 allowed_networks = ["127.0.0.0/8"]
+allowed_origins = []
 auth_database = "~/.local/state/yoosee-cam-utils/viewer-users.sqlite3"
 tls_cert = "~/.config/yoosee-cam-utils/tls/server.crt"
 tls_key = "~/.config/yoosee-cam-utils/tls/server.key"

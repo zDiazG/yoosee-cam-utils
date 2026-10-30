@@ -1010,7 +1010,10 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin", "")
         try:
             parsed = urlsplit(origin)
-            return parsed.scheme == "https" and parsed.netloc == self.headers.get("Host", "") and not parsed.path and not parsed.query and not parsed.fragment
+            if (parsed.scheme != "https" or not parsed.netloc or parsed.path or parsed.query or parsed.fragment
+                    or parsed.username is not None or parsed.password is not None):
+                return False
+            return parsed.netloc == self.headers.get("Host", "") or origin in self.server.allowed_origins
         except ValueError:
             return False
 
@@ -1408,6 +1411,26 @@ class Handler(BaseHTTPRequestHandler):
                      extra_headers=(("Set-Cookie", cookie),))
 
 
+def _https_origins(origins):
+    if not isinstance(origins, (list, tuple)):
+        raise ValueError("web.allowed_origins must be a list of canonical HTTPS origins without paths")
+    result = set()
+    for origin in origins:
+        try:
+            if not isinstance(origin, str):
+                raise ValueError
+            parsed = urlsplit(origin)
+            if (parsed.scheme != "https" or not parsed.hostname or parsed.netloc != parsed.netloc.lower()
+                    or parsed.username is not None or parsed.password is not None
+                    or parsed.path or parsed.query or parsed.fragment):
+                raise ValueError
+            _ = parsed.port  # Reject malformed ports during startup, not on a request.
+        except (TypeError, ValueError) as error:
+            raise ValueError("web.allowed_origins must be a list of canonical HTTPS origins without paths") from error
+        result.add(origin)
+    return result
+
+
 def make_server(camera, web, streams=None, default_camera="cam01", recording=None):
     asset = Path(web["hls_js"]).expanduser()
     if hashlib.sha256(asset.read_bytes()).hexdigest() != web["hls_js_sha256"]:
@@ -1434,6 +1457,7 @@ def make_server(camera, web, streams=None, default_camera="cam01", recording=Non
         server.trusted_proxies = [ipaddress.ip_network(value, strict=False) for value in web.get("trusted_proxies", [])]
     except (TypeError, ValueError) as error:
         raise ValueError("web.trusted_proxies must contain IP addresses or CIDRs") from error
+    server.allowed_origins = _https_origins(web.get("allowed_origins", []))
     server.auth_lock = threading.Lock()
     server.failures = defaultdict(deque)
     server.auth_hash_semaphore = threading.BoundedSemaphore(2)

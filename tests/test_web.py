@@ -15,7 +15,7 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from yoosee_cam_utils.web import make_server, Streams, CameraRegistry, Handler
+from yoosee_cam_utils.web import make_server, Streams, CameraRegistry, Handler, _https_origins
 from yoosee_cam_utils.web import SessionStore
 
 
@@ -239,6 +239,22 @@ class WebTests(unittest.TestCase):
         self.assertEqual(e.exception.code, 403)
         e.exception.close()
         self.streams.ptz.assert_not_called()
+
+    def test_configured_https_origin_allows_login_behind_host_rewriting_proxy(self):
+        origin = "https://watchpost.example.test"
+        self.server.allowed_origins.add(origin)
+        body = json.dumps({"username": "admin", "password": "test-only-password"}).encode()
+        request = urllib.request.Request(self.url + "/api/auth/login", data=body, method="POST", headers={
+            "Content-Type": "application/json", "X-Camera-Client": "1", "Origin": origin,
+        })
+        with urllib.request.urlopen(request, context=self.context, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("watchpost_session=", response.headers.get("Set-Cookie", ""))
+
+    def test_configured_origin_must_be_canonical_https_origin(self):
+        for origin in ("http://watchpost.example.test", "https://watchpost.example.test/", "https://user@watchpost.example.test"):
+            with self.subTest(origin=origin), self.assertRaisesRegex(ValueError, "web.allowed_origins"):
+                _https_origins([origin])
 
     def test_authenticated_ptz_post(self):
         with self.request("/api/ptz", authorized=True, data={"pan": .1}, extra={"X-Camera-Client": "1"}) as r:
