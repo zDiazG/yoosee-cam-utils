@@ -13,6 +13,8 @@ let editingUser = null;
 let roleOptions = [];
 let cameraOptions = [];
 let toastTimer = null;
+let csrfToken = '';
+let lastActivitySent = 0;
 
 const AUTO_KEY = 'yoosee.autostart-full-hd';
 const RECORD_LIMIT_KEY = 'yoosee.recording-limit-minutes';
@@ -20,12 +22,13 @@ const RECORD_LIMIT_KEY = 'yoosee.recording-limit-minutes';
 async function api(path, data) {
   const options = data === undefined ? {} : {
     method: 'POST',
-    headers: {'Content-Type': 'application/json', 'X-Camera-Client': '1'},
+    headers: {'Content-Type': 'application/json', 'X-Camera-Client': '1', 'X-CSRF-Token': csrfToken},
     body: JSON.stringify(data),
   };
   const response = await fetch(path, options);
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401 && path !== '/api/auth/status') window.location.assign('/login');
     const error = Error(result.error || `Request failed (${response.status}). Check the camera and try again.`);
     error.status = response.status;
     throw error;
@@ -832,6 +835,12 @@ async function setupAdmin() {
       const roleNames = (user.roles || [user.role]).map(role => roleOptions.find(option => option.id === role)?.label || role);
       detail.textContent = `Roles: ${roleNames.join(', ') || 'None'}`;
       item.append(detail);
+      if ((user.capabilities || []).includes('watcher')) {
+        const watcher = document.createElement('p');
+        watcher.className = 'admin-item-detail';
+        watcher.textContent = 'Unattended session enabled';
+        item.append(watcher);
+      }
       const cameraDetail = document.createElement('p');
       cameraDetail.className = 'admin-item-detail camera-detail';
       const viewIds = Object.keys(user.cameras || {}).filter(id => user.cameras[id] === 'viewer');
@@ -855,6 +864,7 @@ async function setupAdmin() {
         document.querySelector('#new-username').value = user.username;
         document.querySelector('#new-username').disabled = true;
         setSelectedRoles(user.roles || [user.role]);
+        document.querySelector('#watcher-capability').checked = (user.capabilities || []).includes('watcher');
         document.querySelector('#new-view-cameras').value = viewIds.join(', ');
         document.querySelector('#new-control-cameras').value = controlIds.join(', ');
         document.querySelector('#new-networks').value = user.networks.join(',');
@@ -982,7 +992,8 @@ document.querySelector('#create-user').onclick = async () => {
   const editing = Boolean(editingUser);
   if (!/^[A-Za-z0-9_.-]{1,64}$/.test(username)) { showError('Use 1 to 64 letters, numbers, dots, underscores, or hyphens for the username.'); return; }
   try {
-    await api(editing ? '/api/admin/users/access' : '/api/admin/users', {username, password, roles, camera_permissions, networks});
+    const capabilities = document.querySelector('#watcher-capability').checked ? ['watcher'] : [];
+    await api(editing ? '/api/admin/users/access' : '/api/admin/users', {username, password, roles, camera_permissions, networks, capabilities});
     clearUserForm();
     await setupAdmin();
     show(editing ? 'Account access updated.' : 'Account created.');
@@ -997,6 +1008,7 @@ function clearUserForm() {
   document.querySelector('#new-password').disabled = false;
   document.querySelector('#new-password').required = true;
   setSelectedRoles(['viewer']);
+  document.querySelector('#watcher-capability').checked = false;
   document.querySelector('#new-view-cameras').value = '';
   document.querySelector('#new-control-cameras').value = '';
   document.querySelector('#new-networks').value = '';
@@ -1047,6 +1059,9 @@ document.addEventListener('keydown', event => {
 
 (async function initialize() {
   try {
+    const session = await api('/api/auth/status');
+    csrfToken = session.csrf_token;
+    document.querySelector('#identity').textContent = session.watcher ? `${session.username} · watcher` : session.username;
     const inventory = await api('/api/cameras');
     if (!inventory.length) { show('No cameras are configured.'); return; }
     const controllable = inventory.some(camera => camera.can_control);
@@ -1059,5 +1074,18 @@ document.addEventListener('keydown', event => {
     window.setInterval(() => { for (const camera of cameras.values()) syncRecording(camera); }, 2000);
   } catch (error) { showError(error.message); }
 })();
+
+function reportActivity() {
+  if (!csrfToken || document.visibilityState !== 'visible' || Date.now() - lastActivitySent < 60000) return;
+  lastActivitySent = Date.now();
+  api('/api/auth/activity', {}).catch(() => {});
+}
+for (const event of ['pointerdown', 'keydown', 'touchstart']) document.addEventListener(event, reportActivity, {passive: true});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') api('/api/auth/status').then(session => { csrfToken = session.csrf_token; }).catch(() => {});
+});
+document.querySelector('#sign-out').onclick = async () => {
+  try { await api('/api/auth/logout', {}); } finally { window.location.assign('/login'); }
+};
 
 setupAdmin();

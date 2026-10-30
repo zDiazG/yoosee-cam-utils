@@ -1,7 +1,8 @@
 # HTTPS viewer
 
 The optional Python server serves video, audio and PTZ over a single HTTPS port.
-Authentication is checked by the server for the page, API and media. Long-lived live
+The Watchpost web application authenticates the page, API and media with server-side
+cookie sessions. Long-lived live
 connections recheck account status, camera access and source restrictions every two
 seconds. The initial administrator uses the camera login from the private credential file.
 No credential is embedded in JavaScript. Invalid logins are rate limited; network
@@ -68,8 +69,9 @@ before relying on per-user IP restrictions. Forwarded headers are not trusted.
 Default-route CIDRs are rejected.
 
 Live playback prefers fragmented MP4 through MediaSource in compatible browsers.
-FFmpeg copies H.264 video and converts audio to AAC, flushing fragments every 200 ms
-over authenticated HTTPS. This uses the existing port and requires no extra service,
+FFmpeg copies H.264 video and encodes audio to AAC once, sharing that encoded audio
+between the fragmented-MP4 live output and HLS compatibility output. It flushes
+fragments every 200 ms over authenticated HTTPS. This uses the existing port and requires no extra service,
 WebSocket listener or WebRTC media port. Each camera has one RTSP ingest shared by
 its live subscribers and HLS output. The server retains at most 8 MiB and 12 seconds
 of fragments per camera, permits eight live clients per camera, and disconnects slow
@@ -172,16 +174,24 @@ preference to start each camera at Full HD when available. This preference lives
 that browser's local storage. Account grants and source restrictions have unit
 coverage, but a real second camera remains untested. The source allowlist applies at
 the application; the host firewall remains a separate filter. Forwarded client-IP
-headers are ignored, so a tunnel or reverse proxy needs an explicit trusted-proxy
-design before it can preserve per-user source restrictions.
+headers are ignored unless the connection peer is configured as a trusted proxy. The
+forwarded-address handler accepts exactly one address from such a peer; forged headers
+from direct clients are ignored. The named Tailscale Service route is not yet enabled.
 All project text and UI strings must remain English.
 
-## Planned private access and sessions
+## Login sessions
 
-The next batch will use Watchpost branding and a named private service URL. Cookie
-sessions, a 60-minute idle limit, a three-hour normal session cap and an explicitly
-granted watcher capability are specified in [the design](design.md). The current
-runtime still uses Basic authentication and has no application session timeout.
+Sign in at the Watchpost login page. Normal sessions expire after 60 minutes without
+human interaction or three hours after login. Background polling and media delivery do
+not extend idle time. A separately granted watcher capability skips both timeouts.
+Cookies are Secure, HttpOnly, SameSite=Strict, bound to the source address and held
+server-side; a service restart requires a new login. Account access changes revoke
+affected sessions. Mutations require the exact HTTPS origin and a per-session CSRF token.
+
+The loopback-only Caddy backend is prepared on OPS1 and trusts the app certificate.
+The named private Tailscale Service URL remains pending its admin-console Service
+definition, host approval and end-to-end login/source-IP verification. A loopback
+proxy route alone is not an enabled tunnel.
 
 ## User service
 
