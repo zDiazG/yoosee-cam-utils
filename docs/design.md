@@ -6,10 +6,11 @@ Provide a small local camera console with independent live streams and camera
 controls, followed by bounded recording and verified delivery to configurable storage.
 It must work without Frigate or a vendor cloud account. All project text is English.
 
-The running prototype uses Python 3.11 standard-library HTTPS, vanilla HTML/CSS/JS,
+The running service uses Python 3.11 standard-library HTTPS, vanilla HTML/CSS/JS,
 hls.js and FFmpeg. Node.js is not a runtime dependency. The web service supports
-independent configured camera workers, local application accounts, per-camera grants
-and bounded manual recording.
+independent configured camera workers, local application accounts, per-camera grants,
+cookie sessions and bounded manual recording. The web product is named Watchpost;
+the existing CLI and Python package names remain unchanged.
 
 The user accepted the current viewer and PTZ. A left-button web click physically
 moved and stopped the camera. Other directions need individual observation. The
@@ -71,9 +72,10 @@ off. The 120-second reaper applies only to viewer workers and must not stop reco
 
 Separate web accounts from device credentials. The service stores salted scrypt
 password hashes, roles and grants in a private SQLite file and keeps camera secrets in
-protected external files. HTTPS Basic authentication is checked on every page, API
-and media request; invalid attempts are rate limited. Disabling an account blocks its
-next request. The service does not issue cookies or sessions.
+protected external files. Login issues an opaque, address-bound Secure, HttpOnly,
+SameSite cookie. Requests recheck current account, source-network and camera grants
+without repeating scrypt. Invalid logins are rate limited. Disabling an account blocks
+its next request and revokes its sessions.
 Do not send camera credentials to the browser or share one device password among users.
 
 Accounts can combine the `web_admin`, `camera_admin` and `viewer` roles. A web
@@ -96,64 +98,35 @@ An allowed IP still requires authentication. Changes prevent disabling or downgr
 the last enabled administrator and removing the current administrator's last allowed
 source network. Local CLI recovery and an audit trail remain open work.
 
-Direct requests use the socket peer address. Ignore forwarded identity/IP headers
-unless the peer is an explicitly trusted proxy. For a future reverse proxy, enforce
-an exact public origin and validate its forwarded-address chain. private overlay network/WireGuard
-supply reachability, not automatic application administrator rights. Cloudflare
-Access headers become identity only through a configured validation adapter.
-The next private-ingress batch must preserve source restrictions through an explicitly
-trusted proxy and retain application authentication. Inspect the existing private
-ingress and Service allowance before provisioning.
+Direct requests use the socket peer address. Forwarded IP is accepted only from an
+explicitly trusted proxy, and only as a single address. Mutations require the exact
+HTTPS origin and a per-session CSRF token. private overlay network/WireGuard supply reachability,
+not automatic application administrator rights. The named private private network service
+still requires its Service definition and end-to-end verification; do not treat the
+loopback reverse proxy route alone as an enabled tunnel. The reverse proxy backend is prepared on private ingress host
+at a loopback-only listener and validates the app's TLS certificate. Service creation,
+advertisement approval and login through the final URL remain pending.
 
-## Planned Watchpost access and sessions
-
-Watchpost is the selected name for the web application. Branding and the private
-service hostname are pending implementation; existing CLI/package names remain valid.
-Use a named private private network service behind the established ingress when available.
-Keep deployment addresses and credentials in private configuration. Validate upstream
-TLS with the service certificate, stream responses without proxy buffering, and trust
-forwarded client addresses only from configured proxy peers. The proxy must sanitize
-incoming forwarding headers; direct callers cannot choose their source address.
-private overlay network reachability does not grant application permissions.
-
-Replace browser Basic authentication with a login page and opaque server-side session
-tokens in Secure, HttpOnly, SameSite cookies. Keep password verification at login,
-rate-limit failed logins, validate mutation origins/CSRF tokens, and support logout.
-Existing account hashes and camera grants must survive the migration. Account disable,
-password changes and access revocation must terminate relevant sessions and streams.
-
-Default accounts expire after 60 minutes without human interaction or after three
-hours from login, whichever comes first. Media downloads and background polling do
-not extend idle time. A bounded heartbeat reports recent input and page visibility;
-server time controls expiration. A resumed or suspended page checks its session before
-reconnecting and prompts for authentication when the session is expired or uncertain.
-
-A separately granted `watcher` account capability permits unattended monitoring
-without idle or absolute timeout. It grants no camera or administrator access and is
-not implicitly selected by All roles. Administrators can revoke it. Logout, password
-changes, account disable and service restart still invalidate the session. A browser
-restart requires login; cross-restart session persistence is outside this batch.
-
-Acceptance includes accelerated expiry checks, watcher monitoring, logout and live
-revocation, preserved accounts, rejected forged forwarding headers, and authenticated
-live/PTZ/clip playback through the private URL. Deployment backs up the account store
-and ingress configuration; rollback restores them and invalidates issued sessions.
+Default sessions expire after 60 minutes without human interaction or three hours
+after login, whichever comes first. Background polling and media delivery do not extend
+idle time. A separately granted `watcher` capability skips these timeouts but grants
+no camera or administrator rights. Sessions are held in memory, bounded to 512, and
+reset on service restart. Account access edits and disable operations revoke sessions.
 
 ## Resource use and planned reductions
 
 The managed glibc service limits allocator arenas to two and maps allocations above
-1 MiB so large scrypt workspaces are released after request threads finish. CSS/JavaScript have public ETag revalidation and
-can stay cached after login expires. These files contain no camera or account data;
-private APIs and media remain authenticated and uncached.
+1 MiB so large scrypt workspaces are released after request threads finish. CSS and
+JavaScript have public ETag revalidation and can stay cached after login expires. These
+files contain no camera or account data; private APIs and media remain authenticated
+and uncached.
 
-Video decoding and saved-clip playback already run in the client browser. Keep source
-video copying and one shared camera ingest for live viewers. Password hashing on every
-HTTP request and duplicate AAC encoding for live/HLS are avoidable server work.
-Measure before and after removing repeated password verification and consolidating
-AAC encoding or making the HLS compatibility output demand-driven. Preserve the
-working MediaSource transport and browser fallback. Do not move camera credentials
-or direct RTSP access into browsers. Validate CPU, memory, startup, buffered media and
-revocation with one viewer and multiple viewers before claiming a reduction.
+Video decoding and saved-clip playback run in the client browser. One FFmpeg RTSP
+worker copies video and performs one AAC encode shared by the fragmented-MP4 live
+output and HLS compatibility output. Cookie requests validate the session without
+repeating scrypt. Preserve the MediaSource transport and browser fallback. Do not move
+camera credentials or direct RTSP access into browsers. Report CPU and memory with
+the workload stated; idle and active-stream measurements are different baselines.
 
 ## Frontend direction
 

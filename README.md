@@ -42,11 +42,11 @@ FFmpeg credentials travel through a stdin playlist instead of process arguments.
 Captured errors redact the configured password. Media and private configuration
 are ignored by Git. No cloud upload, firmware change or continuous recorder is installed.
 
-An optional [HTTPS viewer](docs/web-viewer.md) provides server authentication,
+An optional [Watchpost HTTPS viewer](docs/web-viewer.md) provides server authentication,
 video/audio, profile selection and short PTZ movements with an adjustable pulse
-duration. Live playback uses fragmented MP4 over authenticated HTTPS and the browser's
-MediaSource API, with HLS as a compatibility fallback. One camera connection preserves
-the source video and converts audio to AAC. It stops after two minutes without media
+duration. It uses cookie sessions, fragmented MP4 over authenticated HTTPS and the
+browser's MediaSource API, with HLS as a compatibility fallback. One camera connection
+copies video and encodes audio once for both outputs. It stops after two minutes without media
 requests. All viewers share the selected profile.
 
 The viewer now has independent configured camera workers, per-camera controls, bulk
@@ -76,8 +76,10 @@ of login. Camera data, APIs, pages and media stay authenticated and uncached. Th
 managed Linux service limits allocator arenas to reduce retained authentication
 workspace memory. Video decoding and clip playback run in the browser.
 
-The next planned web batch introduces Watchpost branding, private named access and
-controlled login sessions. These are requirements in [the design](docs/design.md),
-not deployed capabilities.
+Normal browser sessions expire after one hour idle or three hours total. A separately
+granted watcher capability permits unattended monitoring. The named private private overlay network
+Service URL still needs a Service definition in the tailnet admin console and
+end-to-end verification. Its loopback-only reverse proxy backend is prepared on private ingress host. See
+[viewer operations](docs/web-viewer.md) for login and deployment behavior.
 
 Run local checks with `PYTHONPATH=src python3 -m unittest discover -s tests`.

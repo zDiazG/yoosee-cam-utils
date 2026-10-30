@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Camera viewer</title>
+<title>Watchpost</title>
 <link rel="stylesheet" href="/style.css">
 <main>
   <header class="masthead">
@@ -23,10 +23,11 @@
     </div>
     <div class="masthead-copy">
       <p class="eyebrow">LOCAL CAMERA CONSOLE</p>
-      <h1>Camera viewer</h1>
+      <h1>Watchpost</h1>
       <p>Live video and local recordings. No cloud uploads.</p>
     </div>
     <output id="status" class="app-status" aria-live="polite">Loading cameras…</output>
+    <div class="account-menu"><span id="identity"></span><button id="sign-out" type="button">Sign out</button></div>
   </header>
 
   <section id="home-view" class="page-view">
@@ -89,6 +90,7 @@
         <label>View-only camera IDs <input id="new-view-cameras" placeholder="cam01, 02 or ALL" maxlength="512" spellcheck="false"></label>
         <label>Control camera IDs <input id="new-control-cameras" placeholder="cam01, 02 or ALL" maxlength="512" spellcheck="false"></label>
         <label>Allowed source IPs/CIDRs <input id="new-networks" placeholder="192.0.2.10/32, 192.0.2.11/32" maxlength="2048" spellcheck="false"></label>
+        <label class="watcher-option"><input id="watcher-capability" type="checkbox"> Allow unattended monitoring session</label>
       </div>
       <div class="form-actions"><button id="create-user" class="button-primary" type="button">Create account</button><button id="cancel-edit" type="button" hidden>Cancel edit</button></div>
       <p class="help-text">Roles can be combined. Web administrators manage accounts and have access to every camera; camera administrators control assigned cameras; viewers can watch and record on assigned cameras. Separate IDs and source networks with commas, semicolons or spaces. Use ALL for every configured camera. Numeric suffixes such as 02 resolve to cam02. Passwords need 12 to 256 characters.</p>

@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import ipaddress
 import json
@@ -13,9 +12,11 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 import uuid
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from yoosee_cam_utils.web import make_server, Streams, CameraRegistry
+from yoosee_cam_utils.web import make_server, Streams, CameraRegistry, Handler
+from yoosee_cam_utils.web import SessionStore
 
 
 class WebTests(unittest.TestCase):
@@ -45,22 +46,56 @@ class WebTests(unittest.TestCase):
         self.thread.start()
         self.url = f"https://127.0.0.1:{self.server.server_address[1]}"
         self.context = ssl.create_default_context(cafile=str(self.cert))
+        self.test_sessions = {}
 
     def tearDown(self):
         self.server.shutdown(); self.server.server_close(); self.thread.join()
 
     def request(self, path, authorized=False, data=None, extra=None, username="admin", password="test-only-password"):
-        headers = extra or {}
+        headers = dict(extra or {})
+        session_key = (username, password)
+        if authorized and session_key not in self.test_sessions:
+            self._login(username, password)
         if authorized:
-            headers["Authorization"] = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
+            token, csrf = self.test_sessions[session_key]
+            headers.setdefault("Cookie", f"watchpost_session={token}")
+            headers.setdefault("X-CSRF-Token", csrf)
+            headers.setdefault("X-Camera-Client", "1")
+            headers.setdefault("Origin", self.url)
         if data is not None:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(self.url + path, headers=headers, data=json.dumps(data).encode() if data is not None else None)
-        return urllib.request.urlopen(req, context=self.context, timeout=5)
+        try:
+            return urllib.request.urlopen(req, context=self.context, timeout=5)
+        except urllib.error.HTTPError as error:
+            if authorized and error.code == 401:
+                error.close()
+                self.test_sessions.pop(session_key, None)
+                self._login(username, password)
+                token, csrf = self.test_sessions[session_key]
+                headers["Cookie"] = f"watchpost_session={token}"
+                headers["X-CSRF-Token"] = csrf
+                req = urllib.request.Request(self.url + path, headers=headers, data=json.dumps(data).encode() if data is not None else None)
+                return urllib.request.urlopen(req, context=self.context, timeout=5)
+            raise
+
+    def _login(self, username, password):
+        body = json.dumps({"username": username, "password": password}).encode()
+        request = urllib.request.Request(self.url + "/api/auth/login", data=body, method="POST", headers={
+            "Content-Type": "application/json", "X-Camera-Client": "1", "Origin": self.url,
+        })
+        with urllib.request.urlopen(request, context=self.context, timeout=5) as response:
+            result = json.load(response)
+            cookie = response.headers.get("Set-Cookie", "")
+            token = cookie.split("watchpost_session=", 1)[1].split(";", 1)[0]
+            self.test_sessions[(username, password)] = (token, result["csrf_token"])
 
     def test_page_requires_server_auth(self):
+        with self.request("/") as response:
+            self.assertEqual(response.geturl().split("/")[-1], "login")
+            self.assertIn("Sign in", response.read().decode())
         with self.assertRaises(urllib.error.HTTPError) as e:
-            self.request("/")
+            self.request("/api/cameras")
         self.assertEqual(e.exception.code, 401)
         e.exception.close()
 
@@ -86,7 +121,7 @@ class WebTests(unittest.TestCase):
 
     def test_fake_frontend_cookie_does_not_bypass_auth(self):
         with self.assertRaises(urllib.error.HTTPError) as e:
-            self.request("/api/profiles", extra={"Cookie": "admin=true; authenticated=1"})
+            self.request("/api/profiles", extra={"Cookie": "admin=true; authenticated=1; watchpost_session=fake"})
         self.assertEqual(e.exception.code, 401)
         e.exception.close()
         self.streams.profiles.assert_not_called()
@@ -94,6 +129,79 @@ class WebTests(unittest.TestCase):
     def test_authenticated_profiles(self):
         with self.request("/api/profiles", authorized=True) as r:
             self.assertEqual(json.load(r), [{"token": "profile0"}])
+
+    def test_cookie_session_avoids_rehashing_password_on_requests(self):
+        self._login("admin", "test-only-password")
+        with patch.object(self.server.users, "authenticate", side_effect=AssertionError("password hash must run only at sign-in")):
+            with self.request("/api/profiles", authorized=True) as response:
+                self.assertEqual(json.load(response), [{"token": "profile0"}])
+
+    def test_session_expiry_uses_server_idle_timeout(self):
+        self._login("admin", "test-only-password")
+        token, _ = self.test_sessions[("admin", "test-only-password")]
+        with patch.object(SessionStore, "IDLE_SECONDS", 0):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request("/api/auth/status", extra={"Cookie": f"watchpost_session={token}"})
+            self.assertEqual(error.exception.code, 401)
+            error.exception.close()
+
+    def test_watcher_capability_skips_session_timeouts(self):
+        data={"username":"watcher-user","password":"watcher-session-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":["127.0.0.0/8"],"capabilities":["watcher"]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}):
+            pass
+        self._login("watcher-user", "watcher-session-password")
+        token, _ = self.test_sessions[("watcher-user", "watcher-session-password")]
+        with patch.object(SessionStore, "IDLE_SECONDS", 0), patch.object(SessionStore, "ABSOLUTE_SECONDS", 0):
+            with self.request("/api/auth/status", extra={"Cookie": f"watchpost_session={token}"}) as response:
+                self.assertTrue(json.load(response)["watcher"])
+
+    def test_session_store_bounds_memory_without_invalidating_existing_sessions(self):
+        users = Mock()
+        users.session_user.side_effect = lambda username, _address: {
+            "username": username, "watcher": username.startswith("watcher")
+        }
+        sessions = SessionStore(users)
+        sessions.MAX_SESSIONS = 2
+        first = sessions.issue({"username": "alice"}, ipaddress.ip_address("127.0.0.1"))
+        second = sessions.issue({"username": "bob"}, ipaddress.ip_address("127.0.0.1"))
+        third = sessions.issue({"username": "carol"}, ipaddress.ip_address("127.0.0.1"))
+        self.assertEqual(len(sessions.items), 2)
+        self.assertIsNone(third)
+        self.assertIsNotNone(sessions.get(first[0], ipaddress.ip_address("127.0.0.1")))
+        self.assertIsNotNone(sessions.get(second[0], ipaddress.ip_address("127.0.0.1")))
+        sessions.items.clear()
+        watcher_one = sessions.issue({"username": "watcher-one"}, ipaddress.ip_address("127.0.0.1"))
+        watcher_two = sessions.issue({"username": "watcher-two"}, ipaddress.ip_address("127.0.0.1"))
+        watcher_three = sessions.issue({"username": "watcher-three"}, ipaddress.ip_address("127.0.0.1"))
+        self.assertIsNotNone(watcher_one)
+        self.assertIsNotNone(watcher_two)
+        self.assertIsNone(watcher_three)
+        self.assertEqual(len(sessions.items), 2)
+
+    def test_forwarded_address_is_used_only_for_exact_trusted_proxy(self):
+        handler = SimpleNamespace(
+            client_address=("192.0.2.1", 1234),
+            server=SimpleNamespace(trusted_proxies=[ipaddress.ip_network("192.0.2.1/32")]),
+            headers={"X-Forwarded-For": "192.0.2.1"},
+        )
+        self.assertEqual(str(Handler.get_client_address(handler)), "192.0.2.1")
+        handler.client_address = ("192.0.2.1", 1234)
+        self.assertEqual(str(Handler.get_client_address(handler)), "192.0.2.1")
+        handler.client_address = ("192.0.2.1", 1234)
+        handler.headers = {"X-Forwarded-For": "192.0.2.1, 192.0.2.1"}
+        with self.assertRaises(ValueError):
+            Handler.get_client_address(handler)
+
+    def test_session_cookie_rejects_non_ascii_token_without_collision(self):
+        self.assertIsNone(self.server.sessions.get("abcé", ipaddress.ip_address("127.0.0.1")))
+
+    def test_mutation_requires_csrf_token(self):
+        self._login("admin", "test-only-password")
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/ptz", authorized=True, data={"pan":.1}, extra={"X-CSRF-Token":"wrong"})
+        self.assertEqual(error.exception.code, 403)
+        error.exception.close()
+        self.streams.ptz.assert_not_called()
 
     def test_stream_status_reports_measured_source_fps(self):
         stream_dir = self.root / "measured-stream"
@@ -117,11 +225,11 @@ class WebTests(unittest.TestCase):
     def test_repeated_invalid_auth_is_rate_limited(self):
         for _ in range(12):
             with self.assertRaises(urllib.error.HTTPError) as e:
-                self.request("/")
+                self.request("/api/auth/login", data={"username":"admin","password":"wrong-password"}, extra={"Origin":self.url,"X-Camera-Client":"1"})
             self.assertEqual(e.exception.code, 401)
             e.exception.close()
         with self.assertRaises(urllib.error.HTTPError) as e:
-            self.request("/")
+            self.request("/api/auth/login", data={"username":"admin","password":"wrong-password"}, extra={"Origin":self.url,"X-Camera-Client":"1"})
         self.assertEqual(e.exception.code, 429)
         e.exception.close()
 
@@ -396,6 +504,15 @@ class WebTests(unittest.TestCase):
         self.assertEqual(error.exception.code,409)
         self.assertIn("administrator source",json.load(error.exception)["error"])
         error.exception.close()
+
+    def test_user_network_validation_accepts_mixed_ipv4_and_ipv6_allowlists(self):
+        users = self.server.users
+        with users._session() as db:
+            db.execute("INSERT INTO allowed_networks(cidr) VALUES ('fd00::/64')")
+        users.update_access("admin", roles=["web_admin"], camera_permissions={},
+                            networks=["127.0.0.1/32", "fd00::1/128"], camera_ids=["cam01"])
+        admin = next(user for user in users.inventory() if user["username"] == "admin")
+        self.assertEqual(set(admin["networks"]), {"127.0.0.1/32", "fd00::1/128"})
 
     def test_live_connection_rechecks_account_and_source_revocation(self):
         users = self.server.users

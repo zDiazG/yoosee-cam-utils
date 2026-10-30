@@ -1,6 +1,5 @@
 """Authenticated LAN HTTPS viewer with independent, bounded camera workers."""
 import argparse
-import base64
 from collections import defaultdict, deque
 from contextlib import contextmanager
 import hashlib
@@ -21,6 +20,7 @@ import sys
 import threading
 import time
 import tomllib
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 import uuid
@@ -106,9 +106,15 @@ class Streams:
             stream_dir = self.directory / uuid.uuid4().hex
             stream_dir.mkdir(mode=0o700)
             log = (stream_dir / "worker.log").open("wb")
+            tee = (
+                f"[f=hls:hls_time=2:hls_list_size=6:hls_delete_threshold=2:"
+                f"hls_flags=delete_segments+independent_segments+omit_endlist:"
+                f"hls_segment_filename={stream_dir / 'seg%09d.ts'}]{stream_dir / 'index.m3u8'}|"
+                "[f=mp4:movflags=+empty_moov+default_base_moof+frag_keyframe:"
+                "frag_duration=200000:flush_packets=1]pipe:1"
+            )
             args = ["ffmpeg", "-nostdin", "-v", "error", "-fflags", "+genpts", "-analyzeduration", "1000000", "-probesize", "262144", "-protocol_whitelist", "pipe,file,rtsp,tcp,udp,rtp", "-f", "concat", "-safe", "0", "-i", "pipe:0",
-                    "-map", "0:v:0", "-map", "0:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-max_interleave_delta", "100000", "-hls_time", "2", "-hls_list_size", "6", "-hls_delete_threshold", "2", "-hls_flags", "delete_segments+independent_segments+omit_endlist", "-hls_segment_filename", str(stream_dir / "seg%09d.ts"), "-f", "hls", str(stream_dir / "index.m3u8"),
-                    "-map", "0:v:0", "-map", "0:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-max_interleave_delta", "100000", "-movflags", "+empty_moov+default_base_moof+frag_keyframe", "-frag_duration", "200000", "-flush_packets", "1", "-f", "mp4", "pipe:1"]
+                    "-map", "0:v:0", "-map", "0:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k", "-max_interleave_delta", "100000", "-flags", "+global_header", "-f", "tee", tee]
             try:
                 process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, bufsize=0)
             except BaseException:
@@ -345,6 +351,11 @@ class UserStore:
                     role TEXT NOT NULL,
                     PRIMARY KEY(username,role)
                 );
+                CREATE TABLE IF NOT EXISTS user_capabilities (
+                    username TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+                    capability TEXT NOT NULL CHECK(capability IN ('watcher')),
+                    PRIMARY KEY(username,capability)
+                );
             """)
             # Additive migration: preserve the existing single-role grant for every
             # account, then let the newer UI store multiple grants independently.
@@ -541,17 +552,53 @@ class UserStore:
             roles = [item[0] for item in db.execute("SELECT role FROM user_roles WHERE username=? ORDER BY role", (username,))]
             return {"username": username, "role": row["role"], "roles": roles, "source_allowed": True, "cameras": grants}
 
+    def session_user(self, username, address):
+        """Reload current access grants without repeating the password hash."""
+        with self.lock, self._session() as db:
+            row = db.execute("SELECT role,enabled FROM users WHERE username=?", (username,)).fetchone()
+            if not row or not row["enabled"]:
+                return None
+            allowed = [ipaddress.ip_network(item[0]) for item in db.execute("SELECT cidr FROM allowed_networks")]
+            owned = [ipaddress.ip_network(item[0]) for item in db.execute("SELECT cidr FROM user_networks WHERE username=?", (username,))]
+            if not any(address in network for network in allowed) or (owned and not any(address in network for network in owned)):
+                return None
+            grants = {item[0]: item[1] for item in db.execute("SELECT camera_id,permission FROM user_cameras WHERE username=?", (username,))}
+            roles = [item[0] for item in db.execute("SELECT role FROM user_roles WHERE username=? ORDER BY role", (username,))]
+            capabilities = [item[0] for item in db.execute("SELECT capability FROM user_capabilities WHERE username=? ORDER BY capability", (username,))]
+            return {"username": username, "role": row["role"], "roles": roles, "cameras": grants,
+                    "capabilities": capabilities, "watcher": "watcher" in capabilities}
+
+    @staticmethod
+    def _normalize_capabilities(capabilities):
+        if capabilities is None:
+            return []
+        if isinstance(capabilities, str):
+            values = re.split(r"[,;\s]+", capabilities.strip())
+        elif isinstance(capabilities, (list, tuple, set)):
+            values = list(capabilities)
+        else:
+            raise ValueError("Capabilities must be a list of text values.")
+        result = []
+        for value in values:
+            if value == "":
+                continue
+            if value != "watcher":
+                raise ValueError("Unknown account capability.")
+            if value not in result:
+                result.append(value)
+        return result
+
     @classmethod
     def _validate_networks(cls, db, networks):
         values = cls._normalize_networks(networks)
         allowed = [ipaddress.ip_network(row[0]) for row in db.execute("SELECT cidr FROM allowed_networks")]
         for value in values:
             network = ipaddress.ip_network(value)
-            if not any(network.subnet_of(parent) for parent in allowed):
+            if not any(network.version == parent.version and network.subnet_of(parent) for parent in allowed):
                 raise ValueError("user network is outside the global allowlist")
         return values
 
-    def create_user(self, username, password, role=None, camera_permissions=None, networks=None, camera_ids=(), roles=None):
+    def create_user(self, username, password, role=None, camera_permissions=None, networks=None, camera_ids=(), roles=None, capabilities=None):
         if not self._valid_username(username):
             raise ValueError("Use a username with 1 to 64 letters, numbers, dots, underscores, or hyphens.")
         try:
@@ -564,6 +611,7 @@ class UserStore:
             networks,
             camera_ids,
         )
+        checked_capabilities = self._normalize_capabilities(capabilities)
         legacy_role = "web_admin" if "web_admin" in selected_roles else "camera_admin" if "camera_admin" in selected_roles else "viewer"
         with self.lock, self._session() as db:
             checked_networks = self._validate_networks(db, checked_networks)
@@ -575,8 +623,10 @@ class UserStore:
                 db.execute("INSERT INTO user_cameras(username,camera_id,permission) VALUES (?,?,?)", (username, camera_id, permission))
             for network in checked_networks:
                 db.execute("INSERT INTO user_networks(username,cidr) VALUES (?,?)", (username, network))
+            for capability in checked_capabilities:
+                db.execute("INSERT INTO user_capabilities(username,capability) VALUES (?,?)", (username, capability))
 
-    def update_access(self, username, role=None, camera_permissions=None, networks=None, camera_ids=(), password=None, roles=None):
+    def update_access(self, username, role=None, camera_permissions=None, networks=None, camera_ids=(), password=None, roles=None, capabilities=None):
         if not self._valid_username(username):
             raise ValueError("Invalid username.")
         selected_roles, checked_permissions, checked_networks = self._validate_account(
@@ -590,6 +640,7 @@ class UserStore:
                 self._password_bytes(password, minimum=12)
             except ValueError as error:
                 raise ValueError("Passwords must be 12 to 256 characters and valid Unicode.") from error
+        checked_capabilities = self._normalize_capabilities(capabilities)
         legacy_role = "web_admin" if "web_admin" in selected_roles else "camera_admin" if "camera_admin" in selected_roles else "viewer"
         with self.lock, self._session() as db:
             row = db.execute("SELECT enabled FROM users WHERE username=?", (username,)).fetchone()
@@ -608,10 +659,13 @@ class UserStore:
                 db.execute("INSERT INTO user_roles(username,role) VALUES (?,?)", (username, selected_role))
             db.execute("DELETE FROM user_cameras WHERE username=?", (username,))
             db.execute("DELETE FROM user_networks WHERE username=?", (username,))
+            db.execute("DELETE FROM user_capabilities WHERE username=?", (username,))
             for camera_id, permission in checked_permissions.items():
                 db.execute("INSERT INTO user_cameras(username,camera_id,permission) VALUES (?,?,?)", (username, camera_id, permission))
             for network in checked_networks:
                 db.execute("INSERT INTO user_networks(username,cidr) VALUES (?,?)", (username, network))
+            for capability in checked_capabilities:
+                db.execute("INSERT INTO user_capabilities(username,capability) VALUES (?,?)", (username, capability))
             if password is not None:
                 salt = secrets.token_bytes(16)
                 db.execute("UPDATE users SET salt=?,password_hash=? WHERE username=?", (salt, self._hash(password, salt), username))
@@ -623,7 +677,8 @@ class UserStore:
                 grants = {row[0]: row[1] for row in db.execute("SELECT camera_id,permission FROM user_cameras WHERE username=? ORDER BY camera_id", (user["username"],))}
                 networks = [row[0] for row in db.execute("SELECT cidr FROM user_networks WHERE username=? ORDER BY cidr", (user["username"],))]
                 roles = [row[0] for row in db.execute("SELECT role FROM user_roles WHERE username=? ORDER BY role", (user["username"],))]
-                result.append({"username": user["username"], "role": user["role"], "roles": roles, "enabled": bool(user["enabled"]), "cameras": grants, "networks": networks})
+                capabilities = [row[0] for row in db.execute("SELECT capability FROM user_capabilities WHERE username=? ORDER BY capability", (user["username"],))]
+                result.append({"username": user["username"], "role": user["role"], "roles": roles, "capabilities": capabilities, "enabled": bool(user["enabled"]), "cameras": grants, "networks": networks})
             return result
 
     def set_enabled(self, username, enabled):
@@ -708,6 +763,82 @@ class UserStore:
         return user.get("cameras", {}).get(camera_id) == "camera_admin"
 
 
+class SessionStore:
+    """Short-lived opaque browser sessions; only token digests stay in memory."""
+    IDLE_SECONDS = 60 * 60
+    ABSOLUTE_SECONDS = 3 * 60 * 60
+    MAX_SESSIONS = 512
+
+    def __init__(self, users):
+        self.users = users
+        self.lock = threading.RLock()
+        self.items = {}
+
+    @staticmethod
+    def digest(token):
+        return hashlib.sha256(token.encode("ascii")).hexdigest()
+
+    def issue(self, user, address):
+        current = self.users.session_user(user["username"], address)
+        if current is None:
+            return None
+        token = secrets.token_urlsafe(32)
+        key = self.digest(token)
+        csrf = secrets.token_urlsafe(32)
+        now = time.monotonic()
+        with self.lock:
+            expired = [session_key for session_key, item in self.items.items()
+                       if not item["watcher"] and
+                       (now - item["activity"] >= self.IDLE_SECONDS or now - item["created"] >= self.ABSOLUTE_SECONDS)]
+            for session_key in expired:
+                del self.items[session_key]
+            if len(self.items) >= self.MAX_SESSIONS:
+                return None
+            self.items[key] = {"username": user["username"], "address": str(address), "csrf": csrf,
+                               "created": now, "activity": now, "watcher": current.get("watcher", False)}
+        return token, csrf, current
+
+    def revoke(self, key):
+        with self.lock:
+            self.items.pop(key, None)
+
+    def revoke_user(self, username):
+        with self.lock:
+            for key in [key for key, item in self.items.items() if item["username"] == username]:
+                del self.items[key]
+
+    def get(self, token, address):
+        if not token or len(token) > 128:
+            return None
+        try:
+            key = self.digest(token)
+        except UnicodeEncodeError:
+            return None
+        now = time.monotonic()
+        with self.lock:
+            item = self.items.get(key)
+            if not item or item["address"] != str(address):
+                return None
+            user = self.users.session_user(item["username"], address)
+            expired = (user is None or (not user.get("watcher") and
+                        (now - item["activity"] >= self.IDLE_SECONDS or now - item["created"] >= self.ABSOLUTE_SECONDS)))
+            if expired:
+                self.items.pop(key, None)
+                return None
+            return key, item, user
+
+    def activity(self, token, address):
+        current = self.get(token, address)
+        if not current:
+            return None
+        key, item, user = current
+        with self.lock:
+            if key not in self.items:
+                return None
+            item["activity"] = time.monotonic()
+        return key, item, user
+
+
 class ViewerServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -726,7 +857,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def respond(self, code, body=b"", content_type="application/json", challenge=False, extra_headers=(), cache_control="no-store"):
+    def respond(self, code, body=b"", content_type="application/json", extra_headers=(), cache_control="no-store"):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         if code != 304:
@@ -734,8 +865,6 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", cache_control)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; media-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'")
-        if challenge:
-            self.send_header("WWW-Authenticate", 'Basic realm="Camera viewer", charset="UTF-8"')
         for name, value in extra_headers:
             self.send_header(name, value)
         self.end_headers()
@@ -823,7 +952,8 @@ class Handler(BaseHTTPRequestHandler):
             check_at = 0
             for chunk in live.chunks():
                 if time.monotonic() >= check_at:
-                    if not self.server.users.can_continue_viewing(self.auth_user["username"], ipaddress.ip_address(self.client_address[0]), camera_id):
+                    session = self.server.sessions.get(self.session_token, self.get_client_address())
+                    if not session or not self.server.users.can(session[2], camera_id, "view"):
                         break
                     check_at = time.monotonic() + 2
                 worker.touch()
@@ -835,8 +965,29 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             live.clients.release()
 
+    def request_token(self):
+        try:
+            cookie = SimpleCookie()
+            cookie.load(self.headers.get("Cookie", ""))
+            return cookie["watchpost_session"].value if "watchpost_session" in cookie else None
+        except (KeyError, ValueError):
+            return None
+
+    def get_client_address(self):
+        peer = ipaddress.ip_address(self.client_address[0])
+        if not any(peer in network for network in self.server.trusted_proxies):
+            return peer
+        forwarded = self.headers.get("X-Forwarded-For", "")
+        values = [value.strip() for value in forwarded.split(",") if value.strip()]
+        if len(values) != 1:
+            raise ValueError("trusted proxy must send one canonical client address")
+        return ipaddress.ip_address(values[0])
+
     def authorized(self):
-        ip = ipaddress.ip_address(self.client_address[0])
+        try:
+            ip = self.get_client_address()
+        except ValueError:
+            self.respond(400); return False
         if not self.server.users.is_global_network_allowed(ip):
             self.respond(403); return False
         now = time.monotonic()
@@ -846,21 +997,26 @@ class Handler(BaseHTTPRequestHandler):
                 attempts.popleft()
             if len(attempts) >= 12:
                 self.respond(429); return False
-        try:
-            scheme, value = self.headers.get("Authorization", "").split(" ", 1)
-            raw = base64.b64decode(value, validate=True).decode()
-            username, password = raw.split(":", 1)
-            user = self.server.users.authenticate(username, password, ip) if scheme.lower() == "basic" else None
-        except (ValueError, UnicodeError):
-            user = None
-        if not user:
-            with self.server.auth_lock:
-                attempts.append(now)
-            self.respond(401, challenge=True); return False
-        if not user["source_allowed"]:
-            self.respond(403); return False
-        self.auth_user = user
+        token = self.request_token()
+        session = self.server.sessions.get(token, ip)
+        if not session:
+            self.respond(401, b'{"error":"Your session has expired. Sign in again."}')
+            return False
+        self.session_key, _, self.auth_user = session
+        self.session_token = token
         return True
+
+    def valid_origin(self):
+        origin = self.headers.get("Origin", "")
+        try:
+            parsed = urlsplit(origin)
+            return parsed.scheme == "https" and parsed.netloc == self.headers.get("Host", "") and not parsed.path and not parsed.query and not parsed.fragment
+        except ValueError:
+            return False
+
+    def valid_csrf(self):
+        current = self.server.sessions.get(self.request_token(), self.get_client_address())
+        return bool(current and hmac.compare_digest(current[1]["csrf"], self.headers.get("X-CSRF-Token", "")))
 
     def can_camera(self, camera_id, action):
         if not self.server.users.can(self.auth_user, camera_id, action):
@@ -877,12 +1033,12 @@ class Handler(BaseHTTPRequestHandler):
         # These files contain application code only, never account or camera data.
         # Keep them cacheable even when a user's authentication expires.
         static = {"/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css")}
-        if path in static or path == "/vendor/hls.min.js":
+        if path in static or path in ("/vendor/hls.min.js", "/login.js"):
             try:
                 if path == "/vendor/hls.min.js":
                     asset, mime = self.server.hls_js, "text/javascript"
                 else:
-                    name, mime = static[path]
+                    name, mime = ("login.js", "text/javascript") if path == "/login.js" else static[path]
                     asset = Path(__file__).parent / "static" / name
                 body = asset.read_bytes()
                 etag = '"' + hashlib.sha256(body).hexdigest() + '"'
@@ -893,7 +1049,35 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 self.respond(404)
             return
-        if not self.authorized(): return
+        if path == "/login":
+            self.respond(200, (Path(__file__).parent / "static" / "login.html").read_bytes(), "text/html; charset=utf-8")
+            return
+        if path == "/api/auth/status":
+            try:
+                ip = self.get_client_address()
+            except ValueError:
+                self.respond(400); return
+            session = self.server.sessions.get(self.request_token(), ip)
+            if not session:
+                self.respond(401, b'{"error":"Sign in required."}'); return
+            self.respond(200, json.dumps({"username": session[2]["username"], "watcher": session[2].get("watcher", False), "csrf_token": session[1]["csrf"]}).encode()); return
+        if path == "/":
+            try:
+                ip = self.get_client_address()
+            except ValueError:
+                self.respond(400); return
+            session = self.server.sessions.get(self.request_token(), ip)
+            if not session:
+                self.send_response(302)
+                self.send_header("Location", "/login")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.session_key, _, self.auth_user = session
+            self.session_token = self.request_token()
+        elif not self.authorized():
+            return
         try:
             if path == "/":
                 self.respond(200, (Path(__file__).parent / "static" / "index.html").read_bytes(), "text/html; charset=utf-8")
@@ -996,9 +1180,12 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(503, b'{"error":"Camera temporarily unavailable"}')
 
     def do_POST(self):
+        path = urlsplit(self.path).path
+        if path == "/api/auth/login":
+            self.login()
+            return
         if not self.authorized(): return
-        origin = self.headers.get("Origin")
-        if self.headers.get("X-Camera-Client") != "1" or (origin and origin != "https://" + self.headers.get("Host", "")):
+        if self.headers.get("X-Camera-Client") != "1" or not self.valid_origin() or not self.valid_csrf():
             self.respond(403); return
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -1012,7 +1199,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(400, b'{"error":"Send valid, shallow JSON."}'); return
             if not isinstance(data, dict):
                 self.respond(400, b'{"error":"The request must be a JSON object."}'); return
-            path = urlsplit(self.path).path
+            if path == "/api/auth/logout":
+                self.server.sessions.revoke(self.session_key)
+                self.respond(200, b'{"logged_out":true}', extra_headers=(("Set-Cookie", "watchpost_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0"),)); return
+            if path == "/api/auth/activity":
+                if not self.server.sessions.activity(self.session_token, self.get_client_address()):
+                    self.respond(401, b'{"error":"Your session has expired. Sign in again."}'); return
+                self.respond(200, b'{"active":true}'); return
             scoped = re.fullmatch(r"/api/cameras/([^/]+)/(start|stop|ptz)", path)
             if scoped:
                 camera_id, operation = scoped.groups()
@@ -1099,7 +1292,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.users.create_user(
                         data.get("username"), data.get("password"), data.get("role"),
                         data.get("camera_permissions", {}), data.get("networks"),
-                        list(self.server.cameras.cameras), roles=data.get("roles"),
+                        list(self.server.cameras.cameras), roles=data.get("roles"), capabilities=data.get("capabilities"),
                     )
                 except ValueError as error:
                     self.respond(400, json.dumps({"error": str(error)}).encode()); return
@@ -1112,12 +1305,13 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.users.update_access(
                         data.get("username"), data.get("role"), data.get("camera_permissions", {}),
                         data.get("networks"), list(self.server.cameras.cameras), data.get("password") or None,
-                        roles=data.get("roles"),
+                        roles=data.get("roles"), capabilities=data.get("capabilities"),
                     )
                 except ValueError as error:
                     self.respond(400, json.dumps({"error": str(error)}).encode()); return
                 except KeyError:
                     self.respond(404, b'{"error":"User not found."}'); return
+                self.server.sessions.revoke_user(data.get("username"))
                 result = {"updated": True}
             elif path in ("/api/admin/users/disable", "/api/admin/users/enable"):
                 if not self.require_web_admin(): return
@@ -1130,6 +1324,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(409, json.dumps({"error": str(error)}).encode()); return
                 except KeyError:
                     self.respond(404, b'{"error":"User not found."}'); return
+                if path.endswith("disable"):
+                    self.server.sessions.revoke_user(username)
                 result = {"updated": True}
             elif path == "/api/admin/networks/add":
                 if not self.require_web_admin(): return
@@ -1141,7 +1337,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/admin/networks/remove":
                 if not self.require_web_admin(): return
                 try:
-                    self.server.users.remove_network(data.get("cidr"), ipaddress.ip_address(self.client_address[0]))
+                    self.server.users.remove_network(data.get("cidr"), self.get_client_address())
                 except ValueError as error:
                     self.respond(409, json.dumps({"error": str(error)}).encode()); return
                 result = {"removed": True}
@@ -1159,6 +1355,57 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, json.dumps(result).encode())
         except (OSError, ValueError, KeyError, TypeError, sqlite3.IntegrityError):
             self.respond(400, b'{"error":"Request failed; check camera availability and parameters"}')
+
+    def read_json(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        if not 0 < length <= 16384 or self.headers.get_content_type() != "application/json":
+            raise ValueError("Send a valid JSON request.")
+        data = json.loads(self.rfile.read(length))
+        if not isinstance(data, dict):
+            raise ValueError("The request must be a JSON object.")
+        return data
+
+    def login(self):
+        if not self.valid_origin() or self.headers.get("X-Camera-Client") != "1":
+            self.respond(403); return
+        try:
+            ip = self.get_client_address()
+        except ValueError:
+            self.respond(400); return
+        now = time.monotonic()
+        with self.server.auth_lock:
+            attempts = self.server.failures[str(ip)]
+            while attempts and now - attempts[0] > 60:
+                attempts.popleft()
+            if len(attempts) >= 12:
+                self.respond(429, b'{"error":"Too many failed sign-in attempts."}'); return
+        try:
+            data = self.read_json()
+            username, password = data.get("username"), data.get("password")
+            if not isinstance(username, str) or not isinstance(password, str):
+                raise ValueError("Enter a username and password.")
+            if not self.server.auth_hash_semaphore.acquire(blocking=False):
+                self.respond(429, b'{"error":"Sign-in is busy. Try again shortly."}'); return
+            try:
+                user = self.server.users.authenticate(username, password, ip)
+            finally:
+                self.server.auth_hash_semaphore.release()
+        except (ValueError, UnicodeError, json.JSONDecodeError, RecursionError):
+            user = None
+        if user and not user.get("source_allowed"):
+            self.respond(403, b'{"error":"This source address is not allowed for the account."}'); return
+        if not user:
+            with self.server.auth_lock:
+                self.server.failures[str(ip)].append(now)
+            self.respond(401, b'{"error":"Invalid sign-in or source address."}'); return
+        issued = self.server.sessions.issue(user, ip)
+        if not issued:
+            self.respond(429, b'{"error":"Session could not be created. Try again later."}'); return
+        token, csrf, current = issued
+        max_age = "" if current.get("watcher") else "; Max-Age=10800"
+        cookie = f"watchpost_session={token}; Path=/; Secure; HttpOnly; SameSite=Strict{max_age}"
+        self.respond(200, json.dumps({"username": current["username"], "watcher": current.get("watcher", False), "csrf_token": csrf}).encode(),
+                     extra_headers=(("Set-Cookie", cookie),))
 
 
 def make_server(camera, web, streams=None, default_camera="cam01", recording=None):
@@ -1183,8 +1430,14 @@ def make_server(camera, web, streams=None, default_camera="cam01", recording=Non
         web.get("auth_database", "~/.local/state/yoosee-cam-utils/viewer-users.sqlite3"),
         auth_camera.c["username"], auth_camera.c["password"], list(cameras), web["allowed_networks"],
     )
+    try:
+        server.trusted_proxies = [ipaddress.ip_network(value, strict=False) for value in web.get("trusted_proxies", [])]
+    except (TypeError, ValueError) as error:
+        raise ValueError("web.trusted_proxies must contain IP addresses or CIDRs") from error
     server.auth_lock = threading.Lock()
     server.failures = defaultdict(deque)
+    server.auth_hash_semaphore = threading.BoundedSemaphore(2)
+    server.sessions = SessionStore(server.users)
     server.hls_js = asset
     return server
 
@@ -1204,7 +1457,7 @@ def main():
     web = config["web"]
     if a.dry_run:
         recording = config.get("recording", {})
-        print(json.dumps({"bind": web["bind"], "port": web["port"], "tls": True, "auth": "server-side basic", "allowed_networks": web["allowed_networks"], "cameras": camera_ids, "default_camera": default_camera, "manual_recording": {"enabled": bool(recording.get("enabled", False)), "max_bytes": int(recording.get("max_bytes", 2 * 1024**3)), "reserve_bytes": int(recording.get("reserve_bytes", 5 * 1024**3)), "segment_seconds": int(recording.get("segment_seconds", 900)), "default_session_seconds": int(recording.get("default_session_seconds", 3600))}})); return
+        print(json.dumps({"bind": web["bind"], "port": web["port"], "tls": True, "auth": "cookie sessions", "allowed_networks": web["allowed_networks"], "cameras": camera_ids, "default_camera": default_camera, "manual_recording": {"enabled": bool(recording.get("enabled", False)), "max_bytes": int(recording.get("max_bytes", 2 * 1024**3)), "reserve_bytes": int(recording.get("reserve_bytes", 5 * 1024**3)), "segment_seconds": int(recording.get("segment_seconds", 900)), "default_session_seconds": int(recording.get("default_session_seconds", 3600))}})); return
     server = make_server(cameras, web, default_camera=default_camera, recording=config.get("recording", {}))
     def reap():
         while True:
