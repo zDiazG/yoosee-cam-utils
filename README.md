@@ -78,8 +78,8 @@ workspace memory. Video decoding and clip playback run in the browser.
 
 Normal browser sessions expire after one hour idle or three hours total. A separately
 granted watcher capability permits unattended monitoring. The named private private overlay network
-Service URL still needs a Service definition in the tailnet admin console and
-end-to-end verification. Its loopback-only reverse proxy backend is prepared on private ingress host. See
+Service is advertised through the existing loopback-only reverse proxy backend on private ingress host. Its
+login page and unauthenticated gate are verified over the tailnet. See
 [viewer operations](docs/web-viewer.md) for login and deployment behavior.
 
 Run local checks with `PYTHONPATH=src python3 -m unittest discover -s tests`.
