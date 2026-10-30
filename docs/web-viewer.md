@@ -188,10 +188,10 @@ Cookies are Secure, HttpOnly, SameSite=Strict, bound to the source address and h
 server-side; a service restart requires a new login. Account access changes revoke
 affected sessions. Mutations require the exact HTTPS origin and a per-session CSRF token.
 
-The loopback-only Caddy backend is prepared on OPS1 and trusts the app certificate.
-The named private Tailscale Service URL remains pending its admin-console Service
-definition, host approval and end-to-end login/source-IP verification. A loopback
-proxy route alone is not an enabled tunnel.
+The loopback-only Caddy backend on OPS1 trusts the app certificate. The named private
+Tailscale Service is defined, its OPS1 host is approved, and HTTPS is advertised.
+The tailnet route returns the login page and rejects unauthenticated API status checks.
+Credentialed login, media and PTZ through that route still need regular-use verification.
 
 ## User service
 

@@ -102,10 +102,10 @@ Direct requests use the socket peer address. Forwarded IP is accepted only from 
 explicitly trusted proxy, and only as a single address. Mutations require the exact
 HTTPS origin and a per-session CSRF token. Tailscale/WireGuard supply reachability,
 not automatic application administrator rights. The named private Tailscale Service
-still requires its Service definition and end-to-end verification; do not treat the
-loopback Caddy route alone as an enabled tunnel. The Caddy backend is prepared on OPS1
-at a loopback-only listener and validates the app's TLS certificate. Service creation,
-advertisement approval and login through the final URL remain pending.
+uses the existing OPS1 Caddy host at a loopback-only listener and validates the app's
+TLS certificate. Its Tailscale host is approved and the HTTPS endpoint is advertised.
+The login page and unauthenticated gate pass through the tailnet route; credentialed
+login, media and PTZ through that route still need regular-use verification.
 
 Default sessions expire after 60 minutes without human interaction or three hours
 after login, whichever comes first. Background polling and media delivery do not extend
