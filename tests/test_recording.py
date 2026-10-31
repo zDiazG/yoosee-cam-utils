@@ -42,12 +42,26 @@ class FakeProcess:
         self.returncode = None
         self.signalled = False
         self.gate = gate
+        self.input = b""
 
-    def communicate(self, input=None, timeout=None):
-        if self.gate:
-            self.gate.wait(timeout=2)
+    def _finish(self):
+        if self.returncode is not None:
+            return self.returncode
         Path(self.args[-1]).write_text(f"duration={self.args[self.args.index('-t') + 1]}")
         self.returncode = -2 if self.signalled else 0
+        return self.returncode
+
+    def wait(self, timeout=None):
+        # Popen.wait completes the process but doesn't wait for a stdin pipe reader.
+        self.returncode = -2 if self.signalled else 0
+        return self.returncode
+
+    def communicate(self, input=None, timeout=None):
+        if input is not None:
+            self.input += input
+        if self.gate:
+            self.gate.wait(timeout=2)
+        self._finish()
         return b"", b""
 
     def poll(self):
@@ -105,12 +119,18 @@ class RecordingTests(unittest.TestCase):
         self.fail("recording session did not finish")
 
     def test_session_splits_into_bounded_clips_and_records_hashes(self):
-        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=lambda args, **kwargs: FakeProcess(args)), patch.object(ClipManager, "_probe", side_effect=self.probe):
+        processes = []
+        def factory(args, **kwargs):
+            process = FakeProcess(args)
+            processes.append(process)
+            return process
+        with patch("yoosee_cam_utils.recording.subprocess.Popen", side_effect=factory), patch.object(ClipManager, "_probe", side_effect=self.probe):
             session = self.manager.start("cam01", "main", 5)
             result = self.wait_for_session(session["id"])
         self.assertEqual(result["state"], "complete")
         self.assertEqual(result["max_seconds"], 5)
         self.assertEqual(result["segment_count"], 3)
+        self.assertTrue(all(process.input.startswith(b"ffconcat version 1.0\nfile '") for process in processes))
         clips = self.manager.list_clips("cam01")
         self.assertEqual(len(clips), 3)
         self.assertTrue(all(item["session_id"] == session["id"] for item in clips))

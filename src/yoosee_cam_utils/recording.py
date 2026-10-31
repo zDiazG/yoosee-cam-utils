@@ -301,6 +301,9 @@ class ClipManager:
                     if stop_now and process.poll() is None:
                         process.send_signal(signal.SIGINT)
                     try:
+                        # FFmpeg's -nostdin disables interactive commands, not stdin
+                        # as an explicitly configured media input (pipe:0). Supply the
+                        # playlist to communicate(), which writes and closes that pipe.
                         process.communicate(input=media_input(uri, camera.c), timeout=segment_seconds + 30)
                     except subprocess.TimeoutExpired:
                         if process.poll() is None:
