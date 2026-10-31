@@ -131,6 +131,9 @@ class RecordingTests(unittest.TestCase):
         self.assertEqual(result["max_seconds"], 5)
         self.assertEqual(result["segment_count"], 3)
         self.assertTrue(all(process.input.startswith(b"ffconcat version 1.0\nfile '") for process in processes))
+        for process in processes:
+            self.assertEqual(process.args[process.args.index("-c:v") + 1], "copy")
+            self.assertEqual(process.args[process.args.index("-c:a") + 1], "aac")
         clips = self.manager.list_clips("cam01")
         self.assertEqual(len(clips), 3)
         self.assertTrue(all(item["session_id"] == session["id"] for item in clips))

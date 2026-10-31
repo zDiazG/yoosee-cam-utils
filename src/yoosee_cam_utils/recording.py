@@ -291,7 +291,8 @@ class ClipManager:
                     args = [
                         "ffmpeg", "-nostdin", "-v", "error", "-protocol_whitelist", "pipe,file,rtsp,tcp,udp,rtp",
                         "-f", "concat", "-safe", "0", "-i", "pipe:0", "-t", str(segment_seconds),
-                        "-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-fs", str(budget),
+                        "-map", "0:v:0", "-map", "0:a?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k",
+                        "-fs", str(budget),
                     "-movflags", "+faststart", "-f", "mp4", "-n", str(part),
                     ]
                     process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log)
@@ -320,7 +321,8 @@ class ClipManager:
                     if session["stop_event"].is_set():
                         session["stop_reason"] = session["stop_reason"] or "Stopped by user"
                         break
-                    raise ValueError("camera produced no clip segment")
+                    detail = log_path.read_text(errors="replace")[-1000:]
+                    raise ValueError(redact(detail, camera.c) or "camera produced no clip segment")
                 allow_short = session["stop_event"].is_set()
                 if process.returncode != 0 and not allow_short:
                     detail = log_path.read_text(errors="replace")[-1000:]
