@@ -1,0 +1,87 @@
+# Local development workspace, not the Git branch named "dev".
+/dev/
+/docs/dev/
+
+/AGENTS/
+/AGENTS/*
+/.AGENTS/*
+/.AGENTS/
+/agents/
+/.agents/
+/AGENTS/AGENTS.md
+/.agents/AGENTS.md
+/agents/AGENTS.md
+
+# Personal agent instructions do not belong in project documentation.
+AGENTS.md
+AGENTS-base.md
+AGENTS-global.md
+MEMORIES.md
+MEMORY.md
+HANDOFF.md
+
+# Scratch Markdown and scripts. Keep durable contracts and migrations named normally.
+*[Tt][Mm][Pp]*.md
+*[Tt][Ee][Mm][Pp]*.md
+*[Tt][Mm][Pp]*.sh
+*[Tt][Ee][Mm][Pp]*.sh
+*[Tt][Mm][Pp]*.bash
+*[Tt][Ee][Mm][Pp]*.bash
+*[Tt][Mm][Pp]*.zsh
+*[Tt][Ee][Mm][Pp]*.zsh
+*[Tt][Mm][Pp]*.fish
+*[Tt][Ee][Mm][Pp]*.fish
+*[Tt][Mm][Pp]*.py
+*[Tt][Ee][Mm][Pp]*.py
+*[Tt][Mm][Pp]*.ps1
+*[Tt][Ee][Mm][Pp]*.ps1
+*[Tt][Mm][Pp]*.js
+*[Tt][Ee][Mm][Pp]*.js
+*[Tt][Mm][Pp]*.mjs
+*[Tt][Ee][Mm][Pp]*.mjs
+*[Tt][Mm][Pp]*.ts
+*[Tt][Ee][Mm][Pp]*.ts
+*[Tt][Mm][Pp]*.sql
+*[Tt][Ee][Mm][Pp]*.sql
+
+# Hidden files and directories, with explicit project exceptions below.
+.*
+!.gitignore
+!.github/
+!.github/**
+!.env.example
+!.env.*.example
+
+# Environment files and local credentials.
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.secret
+*.token
+credentials.json
+*_credentials.json
+service-account*.json
+
+# Common local/editor artifacts.
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+taskctl.code-workspace
+__pycache__/
+*.pyc
+
+# Private operator state and camera media
+/docs/dev/
+/config/local/
+/logs/
+/recordings/
+/.venv/

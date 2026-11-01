@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Watchpost</title>
+<link rel="stylesheet" href="/style.css">
+<main>
+  <header class="masthead">
+    <div class="nav-control">
+      <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Open navigation" aria-expanded="false">☰</button>
+      <button id="media-button" class="nav-media" type="button" aria-label="Open media" title="Media">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3.75h11l5 5v11.5H4zM15 4v5h5M8 13h8M8 16.5h8"/></svg>
+      </button>
+      <nav id="nav-menu" class="nav-menu" aria-label="Main navigation" hidden>
+        <button id="nav-home" type="button">Home</button>
+        <div class="nav-settings" hidden>
+          <button id="nav-settings" type="button" aria-haspopup="true">Settings <span aria-hidden="true">›</span></button>
+          <div class="settings-submenu">
+            <button id="nav-security" type="button">Security / Access</button>
+          </div>
+        </div>
+      </nav>
+    </div>
+    <div class="masthead-copy">
+      <p class="eyebrow">LOCAL CAMERA CONSOLE</p>
+      <h1>Watchpost</h1>
+      <p>Live video and local recordings. No cloud uploads.</p>
+    </div>
+    <output id="status" class="app-status" aria-live="polite">Loading cameras…</output>
+    <div class="account-menu"><span id="identity"></span><button id="sign-out" type="button">Sign out</button></div>
+  </header>
+
+  <section id="home-view" class="page-view">
+    <section class="toolbar" aria-label="Stream controls">
+      <div class="toolbar-group">
+        <span class="group-label">Streams</span>
+        <button id="toggle-all" class="button-primary">Start all</button>
+      </div>
+      <div class="toolbar-group">
+        <span class="group-label">Start all at</span>
+        <button id="all-fhd" class="button-quiet">FHD</button>
+        <button id="all-light" class="button-quiet">Lightest</button>
+      </div>
+      <label class="autostart"><input id="autostart" type="checkbox"> Start FHD on page load</label>
+    </section>
+    <section id="camera-grid" class="camera-grid" aria-label="Configured cameras"></section>
+  </section>
+
+  <section id="media-view" class="media-view page-view" hidden>
+    <div class="media-heading">
+      <div><p class="eyebrow">LIBRARY</p><h2>Media</h2><p>Play saved clips in this browser.</p></div>
+      <div class="media-heading-actions">
+        <label id="hidden-clips-control" hidden><input id="show-hidden-clips" type="checkbox"> Hidden clips</label>
+        <button id="media-refresh" type="button">Refresh</button>
+      </div>
+    </div>
+    <div id="media-list" class="media-list" aria-live="polite"></div>
+  </section>
+
+  <section id="settings-view" class="settings-view page-view" hidden>
+    <div class="settings-heading">
+      <p class="eyebrow">SETTINGS</p>
+      <h2>Security / Access</h2>
+      <p>Manage viewer accounts and source IP restrictions.</p>
+    </div>
+    <div class="settings-tabs" role="tablist" aria-label="Security and access settings">
+      <button id="access-tab" class="settings-tab" type="button" role="tab" aria-controls="access-panel" aria-selected="true">Access</button>
+      <button id="users-tab" class="settings-tab" type="button" role="tab" aria-controls="users-panel" aria-selected="false">Users</button>
+    </div>
+    <section id="access-panel" class="settings-panel" role="tabpanel" aria-labelledby="access-tab">
+      <h3>Allowed source networks</h3>
+      <p class="help-text">Accounts can connect only from these networks. This list does not change the host firewall.</p>
+      <div class="form-actions"><label>Add IPs or CIDRs <input id="new-network" placeholder="192.0.2.10/32, 192.0.2.11/32" maxlength="2048" spellcheck="false"></label><button id="add-network" type="button">Add networks</button></div>
+      <div id="network-list" class="admin-list"></div>
+    </section>
+    <section id="users-panel" class="settings-panel" role="tabpanel" aria-labelledby="users-tab" hidden>
+      <h3>Add account</h3>
+      <div class="form-grid">
+        <label>Username <input id="new-username" autocomplete="off" maxlength="64" spellcheck="false"></label>
+        <label>Password <input id="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+        <div class="role-field"><span>Roles</span>
+          <details id="role-select" class="role-select">
+            <summary id="role-summary">Select roles</summary>
+            <div class="role-menu">
+              <label class="role-all"><input id="role-all" type="checkbox"> ALL</label>
+              <div id="role-options" class="role-options"></div>
+            </div>
+          </details>
+        </div>
+        <label>View-only camera IDs <input id="new-view-cameras" placeholder="cam01, 02 or ALL" maxlength="512" spellcheck="false"></label>
+        <label>Control camera IDs <input id="new-control-cameras" placeholder="cam01, 02 or ALL" maxlength="512" spellcheck="false"></label>
+        <label>Allowed source IPs/CIDRs <input id="new-networks" placeholder="192.0.2.10/32, 192.0.2.11/32" maxlength="2048" spellcheck="false"></label>
+        <label class="watcher-option"><input id="watcher-capability" type="checkbox"> Allow unattended monitoring session</label>
+      </div>
+      <div class="form-actions"><button id="create-user" class="button-primary" type="button">Create account</button><button id="cancel-edit" type="button" hidden>Cancel edit</button></div>
+      <p class="help-text">Roles can be combined. Web administrators manage accounts and have access to every camera; camera administrators control assigned cameras; viewers can watch and record on assigned cameras. Separate IDs and source networks with commas, semicolons or spaces. Use ALL for every configured camera. Numeric suffixes such as 02 resolve to cam02. Passwords need 12 to 256 characters.</p>
+      <h3 class="users-heading">Users</h3>
+      <div id="user-list" class="admin-list"></div>
+    </section>
+  </section>
+</main>
+<div id="notice-toast" class="notice-toast" role="alert" aria-live="assertive" hidden>
+  <p id="notice-message"></p>
+  <button id="notice-close" type="button" aria-label="Dismiss message">×</button>
+</div>
+<script src="/vendor/hls.min.js"></script>
+<script src="/app.js"></script>
+</html>
