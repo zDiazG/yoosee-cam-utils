@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · Watchpost</title>
+<link rel="stylesheet" href="/style.css">
+<main class="login-page">
+  <section class="login-card">
+    <p class="eyebrow">PRIVATE CAMERA CONSOLE</p>
+    <h1>Watchpost</h1>
+    <p>Sign in to view cameras and local recordings.</p>
+    <form id="login-form">
+      <label>Username <input name="username" autocomplete="username" maxlength="64" required autofocus></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password" maxlength="256" required></label>
+      <button class="button-primary" type="submit">Sign in</button>
+      <p id="login-error" role="alert" hidden></p>
+    </form>
+  </section>
+</main>
+<script src="/login.js"></script>
+</html>
