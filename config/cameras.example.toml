@@ -4,8 +4,8 @@ credentials_file = "~/.config/yoosee-cam-utils.env"
 host = "192.0.2.10"
 onvif_port = 5000
 rtsp_port = 554
-username_env = "CAM01_NVR_USERNAME"
-password_env = "CAM01_NVR_PASSWORD"
+username_env = "CAM01_USERNAME"
+password_env = "CAM01_PASSWORD"
 
 # Optional HTTPS viewer. Generate your own TLS certificate and private key.
 [web]
