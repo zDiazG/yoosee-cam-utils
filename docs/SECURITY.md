@@ -8,7 +8,9 @@ they leave to the host and network.
 
 These controls apply to anyone who can reach the HTTPS port:
 
-- TLS 1.2 or newer on every connection. There is no plain HTTP listener.
+- TLS 1.2 or newer on every connection. There is no plain HTTP listener. Peers outside
+  the allowlist are dropped before the handshake, and the handshake runs outside the
+  accept thread, so a silent client does not stall the service.
 - A global source allowlist (`web.allowed_networks`). Sign-in, session use and every
   API or media request require an allowed source address. The login page and static
   scripts are served to any client that completes TLS. A default route (`0.0.0.0/0`)
@@ -17,7 +19,9 @@ These controls apply to anyone who can reach the HTTPS port:
 - Passwords hashed with scrypt and a per-account salt. At most two hashes run at the
   same time, and 12 failed sign-ins per minute block that source address.
 - Session cookies that are `Secure`, `HttpOnly` and `SameSite=Strict`, bound to the
-  client address, with idle and absolute timeouts for normal accounts.
+  client address, with idle and absolute timeouts for normal accounts. Watcher
+  accounts (unattended screens) have long-lived sessions, at most two per account, which
+  disabling the account or changing its password ends.
 - CSRF protection on every state change: a custom header, an exact HTTPS `Origin`
   check and a per-session token.
 - A restrictive Content Security Policy with no inline or third-party scripts.
@@ -37,9 +41,12 @@ on the camera network can see or attack these sessions. Keep cameras on a networ
 segment that untrusted devices cannot reach. If the cameras do not need the vendor
 cloud, block their internet access at the router.
 
-The first web administrator starts with the camera's password. A captured camera
-password therefore also opens the web administrator account until that web password
-is changed. Change it in Settings if the camera network is shared.
+The first web administrator is created from a camera's password. A captured camera
+password therefore also opens that account until its web password is changed. Change it
+in Settings if the camera network is shared; Watchpost warns while the two are equal.
+The sign-in password is only compared in memory with camera passwords, and stored
+only as a scrypt hash. A password saved after a camera password change is stored in
+clear text in `camera-credentials.json` (mode 0600), like the env file it overrides.
 
 ## The host
 
@@ -54,8 +61,8 @@ service cannot defend against that. If the workstation runs untrusted software, 
 Watchpost under a dedicated account with its own home directory, or on a separate
 host.
 
-The user service also sets `MemoryMax=512M` and restarts on failure. It does not
-apply systemd sandboxing options yet.
+The user service sets `MemoryMax=512M`, `NoNewPrivileges`, `RestrictSUIDSGID`,
+`LockPersonality` and `RestrictAddressFamilies`, and restarts on failure.
 
 ## Not covered
 
