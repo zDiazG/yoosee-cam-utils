@@ -293,7 +293,7 @@ function renderCamera(item) {
   qualityLabel.append(quality);
   const streamToggle = document.createElement('button');
   streamToggle.type = 'button';
-  streamToggle.disabled = !item.can_control;
+  streamToggle.disabled = !(item.can_control || item.can_start);
   const cameraStreamToggle = streamToggle;
   controls.append(qualityLabel, cameraStreamToggle);
 
@@ -416,7 +416,7 @@ function updateStreamToggle(camera) {
   const busy = camera.streamBusy;
   camera.streamToggle.textContent = busy ? (camera.active ? 'Stopping…' : 'Starting…') : camera.active ? 'Stop stream' : 'Start stream';
   camera.streamToggle.className = camera.active ? 'button-danger' : 'button-primary';
-  camera.streamToggle.disabled = !camera.can_control || busy;
+  camera.streamToggle.disabled = busy || !(camera.can_control || (camera.can_start && !camera.active));
   camera.streamToggle.setAttribute('aria-pressed', String(Boolean(camera.active)));
   updateAllToggle();
 }
@@ -549,7 +549,7 @@ function renderRecordingState(camera, session) {
 
 function updateRecordingToggle(camera) {
   const active = Boolean(camera.recordingSession);
-  camera.record.disabled = !camera.can_control || camera.recordBusy;
+  camera.record.disabled = !camera.can_record || camera.recordBusy;
   camera.record.textContent = camera.recordBusy ? (camera.recordAction === 'stop' ? 'Stopping…' : 'Starting…') : active ? 'Stop recording' : 'Start recording';
   camera.record.className = active ? 'button-stop-record' : 'button-record';
   camera.record.setAttribute('aria-pressed', String(active));
@@ -771,7 +771,8 @@ async function loadCamera(item) {
       camera.quality.append(option);
     }
     let stream = await api(cameraPath(item.id, 'status'));
-    if (autostart.checked && camera.can_control) stream = await api(cameraPath(item.id, 'start'), {profile: preferredProfile(camera, 'fhd')});
+    const wantStart = camera.can_control ? autostart.checked : camera.can_start;
+    if (wantStart && !stream.active) stream = await api(cameraPath(item.id, 'start'), {profile: preferredProfile(camera, 'fhd')});
     if (stream.active) {
       camera.quality.value = stream.profile;
       camera.state.textContent = 'Stream active';
@@ -825,7 +826,7 @@ autostart.onchange = () => localStorage.setItem(AUTO_KEY, String(autostart.check
 async function setupAdmin() {
   try {
     const [users, networks, roles, inventory] = await Promise.all([
-      api('/api/admin/users'), api('/api/admin/networks'), api('/api/admin/roles'), api('/api/cameras'),
+      api('/api/admin/users'), api('/api/admin/networks?detail=1'), api('/api/admin/roles'), api('/api/cameras'),
     ]);
     navSettings.hidden = false;
     roleOptions = roles;
@@ -883,6 +884,8 @@ async function setupAdmin() {
         document.querySelector('#new-view-cameras').value = viewIds.join(', ');
         document.querySelector('#new-control-cameras').value = controlIds.join(', ');
         document.querySelector('#new-networks').value = user.networks.join(',');
+        document.querySelector('#record-capability').checked = (user.capabilities || []).includes('record');
+        document.querySelector('#camera-link').checked = Boolean(user.camera_link);
         document.querySelector('#new-password').disabled = false;
         document.querySelector('#new-password').required = false;
         document.querySelector('#new-password').value = '';
@@ -907,13 +910,15 @@ async function setupAdmin() {
     const networkList = document.querySelector('#network-list');
     networkList.replaceChildren();
     networkList.className = 'admin-list';
-    for (const cidr of networks) {
+    for (const {cidr, source} of networks) {
       const item = document.createElement('div');
       item.className = 'admin-item';
       const label = document.createElement('span');
-      label.textContent = cidr;
+      label.textContent = source === 'config' ? `${cidr} (configuration file)` : cidr;
       const button = document.createElement('button');
       button.textContent = 'Remove';
+      button.disabled = source === 'config';
+      if (source === 'config') button.title = 'Remove it from the configuration file and reload the service.';
       button.onclick = async () => {
         try { await api('/api/admin/networks/remove', {cidr}); await setupAdmin(); show(`Removed ${cidr} from the viewer allowlist.`); }
         catch (error) { showError(error.message); }
@@ -996,7 +1001,6 @@ document.querySelector('#create-user').onclick = async () => {
   if (!roles.length) { showError('Select one or more roles, or choose All permissions.'); return; }
   if (password && (password.length < 12 || password.length > 256)) { showError('Passwords must be 12 to 256 characters.'); return; }
   if (!editingUser && password.length < 12) { showError('Use a password with at least 12 characters.'); return; }
-  if (!networks.length) { showError('Enter at least one allowed source IP or CIDR.'); return; }
   try {
     if (viewInput.length && !roles.includes('viewer')) throw Error('Select Viewer to grant view-only camera access.');
     if (controlInput.length && !roles.includes('camera_admin')) throw Error('Select Camera administrator to grant camera control.');
@@ -1008,7 +1012,9 @@ document.querySelector('#create-user').onclick = async () => {
   if (!/^[A-Za-z0-9_.-]{1,64}$/.test(username)) { showError('Use 1 to 64 letters, numbers, dots, underscores, or hyphens for the username.'); return; }
   try {
     const capabilities = document.querySelector('#watcher-capability').checked ? ['watcher'] : [];
-    await api(editing ? '/api/admin/users/access' : '/api/admin/users', {username, password, roles, camera_permissions, networks, capabilities});
+    const can_record = document.querySelector('#record-capability').checked;
+    const camera_link = document.querySelector('#camera-link').checked;
+    await api(editing ? '/api/admin/users/access' : '/api/admin/users', {username, password, roles, camera_permissions, networks, capabilities, can_record, camera_link});
     clearUserForm();
     await setupAdmin();
     show(editing ? 'Account access updated.' : 'Account created.');
@@ -1024,6 +1030,8 @@ function clearUserForm() {
   document.querySelector('#new-password').required = true;
   setSelectedRoles(['viewer']);
   document.querySelector('#watcher-capability').checked = false;
+  document.querySelector('#record-capability').checked = true;
+  document.querySelector('#camera-link').checked = false;
   document.querySelector('#new-view-cameras').value = '';
   document.querySelector('#new-control-cameras').value = '';
   document.querySelector('#new-networks').value = '';
@@ -1072,12 +1080,45 @@ document.addEventListener('keydown', event => {
   }
 });
 
+function promptCameraCredentials(inventory) {
+  const failing = inventory.filter(camera => camera.auth_failed && localStorage.getItem(`yoosee.camera-prompt:${camera.id}`) !== String(camera.auth_failure_id));
+  if (!failing.length) return;
+  const dialog = document.querySelector('#camera-credentials');
+  document.querySelector('#credentials-cameras').textContent = failing.map(camera => camera.name || camera.id).join(', ');
+  const target = document.querySelector('#credentials-target');
+  target.replaceChildren(new Option('All cameras that rejected their password', 'all'));
+  for (const camera of failing) target.append(new Option(camera.name || camera.id, camera.id));
+  document.querySelector('#credentials-error').textContent = '';
+  dialog.showModal();
+  document.querySelector('#credentials-skip').onclick = () => {
+    if (document.querySelector('#credentials-dismiss').checked) for (const camera of failing) localStorage.setItem(`yoosee.camera-prompt:${camera.id}`, String(camera.auth_failure_id));
+    dialog.close();
+  };
+  document.querySelector('#credentials-save').onclick = async () => {
+    const error = document.querySelector('#credentials-error');
+    try {
+      const result = await api('/api/admin/cameras/credentials', {
+        camera_id: target.value, username: document.querySelector('#credentials-user').value,
+        password: document.querySelector('#credentials-password').value});
+      document.querySelector('#credentials-password').value = '';
+      dialog.close();
+      show(`Updated credentials for ${result.updated.join(', ')}. Reloading.`);
+      window.location.reload();
+    } catch (failure) { error.textContent = failure.message; }
+  };
+}
+
 (async function initialize() {
   try {
     const session = await api('/api/auth/status');
     csrfToken = session.csrf_token;
     document.querySelector('#identity').textContent = session.watcher ? `${session.username} · watcher` : session.username;
     const inventory = await api('/api/cameras');
+    if (session.password_matches_camera && !sessionStorage.getItem('yoosee.password-warning')) {
+      sessionStorage.setItem('yoosee.password-warning', '1');
+      showError('Your web password is the same as a camera password. Change it in Settings if the camera network is shared.');
+    }
+    if (session.admin) promptCameraCredentials(inventory);
     if (!inventory.length) { show('No cameras are configured.'); return; }
     const controllable = inventory.some(camera => camera.can_control);
     for (const id of ['all-fhd', 'all-light']) document.getElementById(id).disabled = !controllable;
