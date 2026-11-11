@@ -1,51 +1,62 @@
-# Design and implementation status
+# Design status
 
-## Components
+## Scope
 
-- `yoosee-cam`: ONVIF discovery, profile inspection, RTSP probing, live viewing,
-  short recordings and PTZ commands.
-- `yoosee-web`: optional HTTPS viewer with local accounts, per-camera access,
-  live video and audio, PTZ, and manual FHD clips.
-- FFmpeg handles RTSP media. The browser decodes live and recorded video.
-- Camera credentials come from an external env file or the process environment.
-  Web account data and recordings use private local storage.
+- `yoosee-cam`: ONVIF device and profile inspection, RTSP probing, live viewing,
+  short recordings and bounded PTZ commands for one camera at a time.
+- `yoosee-web` (Watchpost): HTTPS viewer for several cameras with local accounts,
+  per-camera grants, live video and audio, PTZ and manual FHD clips.
 
-The web server keeps one live worker per configured camera. A worker produces HLS
-and fragmented MP4 from one RTSP connection. It copies video and encodes audio to
-AAC. Slow live clients are disconnected when they exceed the bounded fragment
-cache. Switching a camera profile affects every authorized viewer using that
-camera worker.
+[Architecture](architecture.md) describes how the parts fit together and
+[Security model](SECURITY.md) describes the trust boundaries.
 
-Manual recording uses a separate RTSP connection. It writes FHD segments of at
-most 15 minutes, copies video, encodes audio for MP4, verifies output with ffprobe
-and records a SHA-256 digest in a sidecar. The local spool enforces a byte quota
-and free-space reserve. Continuous recording, schedules, motion triggers and
-remote replication are not implemented.
+## Decisions
 
-## Access model
-
-The viewer uses HTTPS, server-side cookie sessions and local accounts. Accounts
-can have viewer, camera-administrator and web-administrator roles. Camera grants
-and source-network restrictions are checked by the server. Camera credentials
-never go to the browser. The application allowlist does not replace host firewall
-rules.
+- **Standard library and FFmpeg only.** No Python dependencies to install or update.
+  The cost is hand-written HTTP routing and SOAP handling, kept small and tested.
+- **Copy video, encode only audio.** The host does not decode or re-encode video, so
+  CPU use stays low. Browsers must support the camera's H.264 stream.
+- **One live worker per camera, shared by all viewers.** This limits RTSP sessions on
+  the camera. A profile change affects every viewer of that camera.
+- **Recording uses its own RTSP session and short verified segments.** A failed
+  segment loses at most one segment, and every saved clip is probed and hashed.
+- **Credentials stay on the server.** FFmpeg gets them through stdin and logs are
+  redacted.
 
 ## Constraints
 
-- Camera profiles and reported frame rates depend on firmware. ONVIF metadata is
-  not proof of delivered frame rate.
-- A camera recording session adds RTSP load alongside live viewing. Check the
-  camera's session limit before increasing concurrent use.
-- HLS latency depends on camera keyframe spacing. Compatible browsers use
-  fragmented MP4 for lower-latency live playback.
-- A real second-camera acceptance run and remote recording storage have not been
-  completed.
+- Profiles and reported frame rates depend on firmware. ONVIF metadata is not proof
+  of the delivered frame rate; Watchpost measures it from live segments.
+- Recording adds an RTSP session alongside live viewing. Check the camera's session
+  limit before raising concurrency.
+- HLS latency depends on keyframe spacing. Browsers with MediaSource use fragmented
+  MP4 for lower latency.
+- Multi-camera behavior is covered by tests with fake cameras. It has not been
+  accepted with two physical cameras.
+
+## Known gaps
+
+- Configuration and the account database can drift. New `web.allowed_networks`
+  entries are not added to the first administrator's own networks, and removed
+  entries stay allowed until removed in Settings. The TOML file is read only at
+  startup.
+- Viewer accounts cannot start a stopped stream, so a viewer or watcher display
+  depends on a camera administrator starting it.
+- Sessions are kept in memory. A service restart signs out every account, including
+  unattended watcher displays.
+- Accounts can only be managed in the browser.
+- A changed camera password requires editing the credentials file and restarting.
 
 ## Planned work
 
-- Verify multi-camera operation with two physical cameras, including partial
-  failures and simultaneous recording.
-- Add scheduled or event-triggered recording only with defined recovery and
-  retention behavior.
-- Add remote clip delivery after destination identity, permissions, integrity
-  checks and retry behavior are agreed and tested.
+In rough order:
+
+1. Fix the gaps above, starting with configuration drift and viewer stream access.
+2. A command-line tool for accounts and networks, and watcher sessions that survive
+   a restart.
+3. A guided setup for new hosts, including headless ones.
+4. Acceptance with two physical cameras, including partial failures and concurrent
+   recording.
+5. Scheduled or event-triggered recording with defined retention and recovery.
+6. Remote clip copies, once destination identity, integrity checks and retries are
+   defined and tested.
