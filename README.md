@@ -27,6 +27,22 @@ No virtual environment or `pip install` is needed. Check the host:
 ./install.sh --check
 ```
 
+## Quick start
+
+On a new host, including a headless one over SSH, the setup script writes the
+configuration, credentials file, TLS certificate and hls.js cache, checks the camera
+and can install the user service:
+
+```sh
+./install.sh --check
+printf '%s\n' 'CAMERA_PASSWORD' | ./scripts/setup.py --camera-host 192.0.2.10 \
+    --san IP:192.0.2.5 --allowed-network 192.0.2.0/24 --bind 192.0.2.5 \
+    --password-stdin --install-service
+```
+
+Add `--dry-run` to see every step first. Without `--password-stdin` the script asks
+for the password on a terminal. The manual steps below do the same by hand.
+
 ## Configure a camera
 
 1. Copy the example configuration. `config/local/` is ignored by Git.
@@ -80,7 +96,8 @@ FFmpeg through stdin, never through command arguments.
 The viewer needs a `[web]` section, a TLS certificate, and a locally cached hls.js
 file. [Viewer setup and operations](docs/web-viewer.md) covers first sign-in,
 accounts, recording, headless hosts and the user service. Manual recording stays
-disabled until `[recording].enabled = true`.
+disabled until `[recording].enabled = true`. `/watch` shows every camera full window for an
+unattended screen.
 
 ## Documentation
 
@@ -98,7 +115,8 @@ tracked files.
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
-The tests use fake cameras and do not contact real devices.
+The tests use fake ONVIF cameras on loopback (`tests/fakes.py`) and do not contact real
+devices.
 
 ## License
 
