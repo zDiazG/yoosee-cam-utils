@@ -66,5 +66,9 @@ apply systemd sandboxing options yet.
 
 ## Reporting a problem
 
-Do not post exploit details in a public issue. Open an issue that asks for a private
-contact, and the details can be shared there.
+Report vulnerabilities privately through GitHub: open the repository's Security tab
+and choose "Report a vulnerability". Fixes are described in public commits and
+pull requests once they are merged.
+
+This is a small personal project without a support commitment. Whoever deploys it is
+responsible for running, updating and exposing it safely.

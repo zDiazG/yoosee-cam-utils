@@ -86,7 +86,7 @@ disabled until `[recording].enabled = true`.
 
 - [Viewer setup and operations](docs/web-viewer.md)
 - [Architecture](docs/architecture.md): modules, request flow, workers and stored state
-- [Security model](docs/security.md): what the access controls cover, and what they cannot
+- [Security model](docs/SECURITY.md): what the access controls cover, and what they cannot
 - [Design status](docs/design.md): implemented scope, constraints and planned work
 
 Keep configuration, credentials, TLS keys, clips and account databases outside
@@ -99,3 +99,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
 The tests use fake cameras and do not contact real devices.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
