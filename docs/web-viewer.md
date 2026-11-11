@@ -6,7 +6,8 @@ on the server.
 
 ## Prepare the host
 
-Complete the camera setup in the [README](../README.md) first, then:
+`scripts/setup.py` (see the README) does the steps below for you. To do them by hand,
+complete the camera setup in the [README](../README.md) first, then:
 
 1. Add the `[web]` section to `config/local/cameras.toml`. The example binds to
    `127.0.0.1`; change `bind` and `allowed_networks` for the clients that should
@@ -44,43 +45,90 @@ On a headless host, confirm the listener with
 
 ## First sign-in
 
-On first start, when the account database is empty, Watchpost creates one web
-administrator from the default camera's credentials: `cam01`, or the first camera in
-the file, or the one passed with `--camera`. Sign in with the same username and
-password the camera uses for RTSP, which is usually `admin` and the device password
-set in the Yoosee app. That password must have at least 8 characters.
+While no account exists, the first sign-in that matches the username and password of
+any configured camera creates the root web administrator. Use the same pair the camera
+uses for RTSP, usually `admin` and the device password set in the Yoosee app. The
+camera must also answer an ONVIF request with that pair, so a stale credentials file
+cannot create an administrator. After one account exists this path is closed for good.
 
-The database stores only a salted scrypt hash. Sign-in never contacts a camera, so
-the administrator can still sign in while cameras are offline.
+The database stores only a salted scrypt hash. Once the administrator exists, sign-in
+never contacts a camera, so it works while cameras are offline.
 
-This link happens once. Later changes to the camera password do not change the web
-password, and the web password can be changed in Settings without touching the
-camera. If the camera password changes, update the credentials file and restart the
-service so live video and recording can reach the camera again.
+The link happens once. The web password can be changed in Settings without touching
+the camera. To also repair cameras whose password changed, tick "Use this password to
+repair cameras that reject theirs" on the account: at sign-in the password is tried,
+in memory only, on cameras that rejected their saved one. The box is off by default.
+Watchpost shows a warning when a web password equals a camera password.
+
+On a host with no reachable camera yet, create the first administrator from the shell
+instead:
+
+```sh
+./scripts/yoosee-web --config config/local/cameras.toml users add admin --preset admin
+```
+
+### When a camera password changes
+
+A camera that answers with an authentication error is marked "rejected the saved
+credentials" on its own card; other cameras are unaffected. Web administrators get a
+dialog to enter the new username and password. Watchpost tests them on the camera
+before saving, can apply them to every camera that failed, and writes them to
+`camera-credentials.json` next to the account database (mode 0600). That file
+overrides the env file for the cameras it names; the env file is never rewritten.
+"Do not ask again for this failure" hides the dialog until the camera fails again.
+Offline cameras never trigger it.
 
 New account passwords must have 12 to 256 characters. Create separate accounts
 instead of sharing the administrator login.
 
 ## Accounts and permissions
 
-Accounts are managed in Settings by a web administrator. There is no command-line
-account tool yet.
+Web administrators manage accounts in Settings, or from the shell while the service
+runs (changes apply on the next request):
 
-| Grant | Can do |
+```sh
+yw="./scripts/yoosee-web --config config/local/cameras.toml"
+$yw users list
+$yw users add alice --preset viewer --cameras cam01,cam02
+$yw users add door --preset watcher --cameras all
+$yw users add ops --preset camera-admin --cameras cam01
+$yw users add root2 --preset admin
+$yw users passwd alice                 # asks twice; or --password-stdin
+$yw users disable alice                # ends her sessions and open streams
+$yw users grant alice cam03
+$yw users set-networks alice 192.0.2.0/24
+$yw networks list
+```
+
+| Preset | Can do |
 | --- | --- |
-| Web administrator | Everything, including accounts and the global network allowlist |
-| Camera administrator on a camera | View, start and stop streams, change profile, PTZ, record, manage clips of that camera |
-| Viewer on a camera | Watch a stream that is already running, record through the API, manage own clips |
+| admin | Everything, including accounts and the global network allowlist |
+| camera-admin | On granted cameras: start, stop, change profile, PTZ, record, manage clips |
+| viewer | On granted cameras: watch, start an idle stream, record, manage own clips |
+| watcher | Like viewer, for an unattended screen; records only when allowed |
 
-A viewer cannot start a stopped stream, and the page disables its record button.
-The stream must be started by a camera administrator. An idle stream stops after
-about two minutes without media requests.
+A viewer starts an idle stream on the camera's default profile (`default_profile` in
+the camera section, else the profile with the most pixels). It cannot switch the
+profile or stop a stream others are watching. An idle stream stops after about two
+minutes without media requests.
 
-The **watcher** option marks an unattended display account. Its session has no idle
-or absolute timeout and its cookie has no expiry date. Sessions live in server
-memory, so a service restart signs every account out, watchers included.
+Recording is a separate permission, on by default except for watchers. Passwords for
+shell-created accounts need 12 to 256 characters. A lost administrator password is
+reset with `users passwd NAME` from the host account.
 
-Other sessions expire after 1 hour without activity or 3 hours after sign-in.
+### Watcher accounts and the watch screen
+
+A watcher account is for a screen that stays on. Open `https://SERVER:PORT/watch`: it
+starts every camera the account can see, plays them full screen with the same
+low-delay player as the main page, and reconnects by itself, with growing delays,
+when a camera, the network or the service restarts. The cameras fill the browser
+window without scrolling and follow window resizes and full screen (F11). Any account
+can open it. Watcher sessions are stored in the
+account database, last 90 days from the last sign-in, and survive a restart. Each
+watcher account keeps at most two sessions; a new sign-in replaces the oldest.
+
+Other accounts' sessions live in memory and end on restart. They expire after 1 hour
+without activity or 3 hours after sign-in.
 
 ### Source networks
 
@@ -88,11 +136,11 @@ Other sessions expire after 1 hour without activity or 3 hours after sign-in.
 networks, which must fall inside the global list. An account without its own networks
 can sign in from any globally allowed address.
 
-Networks from the configuration are copied into the account database at startup.
-Networks added in Settings live only in the database. Removing a network from the
-configuration does not remove it from the database, and new configuration networks
-are not added to the first administrator's own list. Check both places after a
-change; the tracking issue for this drift is open.
+The configuration file is the baseline. At startup and on reload, networks from
+`web.allowed_networks` are added to the database marked as coming from the file, and
+file entries you removed are dropped. Networks added in Settings or with
+`yoosee-web networks add` stay until you remove them there. Settings shows the origin
+of each entry and does not remove file entries. Per-account networks are optional.
 
 ## Live video and PTZ
 
@@ -130,6 +178,15 @@ Set `web.trusted_proxies` to the exact proxy address. Only that peer may send
 the `Host` header, add the public origin, such as `https://watchpost.example`, to
 `web.allowed_origins`. Keep the global allowlist narrow; the proxy does not replace it.
 
+## Reload without restarting
+
+`systemctl --user reload yoosee-cam-web.service` (or `kill -HUP`) re-reads the
+configuration: source networks, allowed origins, trusted proxies and the camera list.
+Added cameras appear, removed cameras stop (a camera with an active recording stays
+until the next reload), and unchanged cameras keep playing for their viewers. A file
+with an error is rejected and the service keeps its running configuration; check the
+journal. Other settings, such as the port or TLS files, need a restart.
+
 ## Install as a user service
 
 The installer prints a dry run by default. `--apply` verifies the unit, then installs
@@ -160,4 +217,4 @@ systemctl --user disable --now yoosee-cam-web.service
 ```
 
 A restart stops active recordings, tries to save each current segment, and signs out
-every browser.
+browsers except watcher sessions.

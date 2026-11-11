@@ -36,27 +36,19 @@
 
 ## Known gaps
 
-- Configuration and the account database can drift. New `web.allowed_networks`
-  entries are not added to the first administrator's own networks, and removed
-  entries stay allowed until removed in Settings. The TOML file is read only at
-  startup.
-- Viewer accounts cannot start a stopped stream, so a viewer or watcher display
-  depends on a camera administrator starting it.
-- Sessions are kept in memory. A service restart signs out every account, including
-  unattended watcher displays.
-- Accounts can only be managed in the browser.
-- A changed camera password requires editing the credentials file and restarting.
+- Non-watcher sessions are kept in memory and end on restart.
+- Configuration reload does not change the port, TLS files or recording spool path.
+- A camera credential saved after a password change is stored in clear text, in a
+  0600 file.
+- Multi-camera behavior is tested with fake cameras only.
 
 ## Planned work
 
 In rough order:
 
-1. Fix the gaps above, starting with configuration drift and viewer stream access.
-2. A command-line tool for accounts and networks, and watcher sessions that survive
-   a restart.
-3. A guided setup for new hosts, including headless ones.
-4. Acceptance with two physical cameras, including partial failures and concurrent
+1. Acceptance with two physical cameras, including partial failures and concurrent
    recording.
-5. Scheduled or event-triggered recording with defined retention and recovery.
-6. Remote clip copies, once destination identity, integrity checks and retries are
+2. A durable clip index and incremental spool accounting for large spools.
+3. Scheduled or event-triggered recording with defined retention and recovery.
+4. Remote clip copies, once destination identity, integrity checks and retries are
    defined and tested.
