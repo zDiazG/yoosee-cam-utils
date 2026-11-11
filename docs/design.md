@@ -8,7 +8,7 @@
   per-camera grants, live video and audio, PTZ and manual FHD clips.
 
 [Architecture](architecture.md) describes how the parts fit together and
-[Security model](security.md) describes the trust boundaries.
+[Security model](SECURITY.md) describes the trust boundaries.
 
 ## Decisions
 
