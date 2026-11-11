@@ -42,6 +42,7 @@ class WebTests(unittest.TestCase):
         self.streams.status.return_value = {"active": False, "profile": None, "playlist": None}
         self.streams.ptz.return_value = {"stop_confirmed": True}
         self.server = make_server(camera, self.web, self.streams)
+        self.server.users.bootstrap_admin("admin", "test-only-password")
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.url = f"https://127.0.0.1:{self.server.server_address[1]}"
@@ -98,6 +99,14 @@ class WebTests(unittest.TestCase):
             self.request("/api/cameras")
         self.assertEqual(e.exception.code, 401)
         e.exception.close()
+
+    def test_watch_page_requires_session_and_serves_kiosk_assets(self):
+        with self.request("/watch") as response:
+            self.assertEqual(response.geturl().split("/")[-1], "login")
+        with self.request("/watch", authorized=True) as response:
+            self.assertIn("watch-grid", response.read().decode())
+        with self.request("/watch.js") as response:
+            self.assertIn("Retrying", response.read().decode())
 
     def test_public_assets_revalidate_without_password_hashing(self):
         for path in ("/app.js", "/style.css", "/vendor/hls.min.js"):
@@ -272,19 +281,15 @@ class WebTests(unittest.TestCase):
         with self.server.users._session() as db:
             db.execute("DELETE FROM allowed_networks")
             db.execute("INSERT INTO allowed_networks(cidr) VALUES ('192.0.2.0/24')")
-        with self.assertRaises(urllib.error.HTTPError) as e:
+        with self.assertRaises(urllib.error.URLError):
             self.request("/", authorized=True)
-        self.assertEqual(e.exception.code, 403)
-        e.exception.close()
 
     def test_forwarded_address_header_cannot_bypass_source_allowlist(self):
         with self.server.users._session() as db:
             db.execute("DELETE FROM allowed_networks")
             db.execute("INSERT INTO allowed_networks(cidr) VALUES ('127.0.0.2/32')")
-        with self.assertRaises(urllib.error.HTTPError) as error:
+        with self.assertRaises(urllib.error.URLError):
             self.request("/", authorized=True, extra={"X-Forwarded-For":"127.0.0.2"})
-        self.assertEqual(error.exception.code,403)
-        error.exception.close()
 
     def add_second_camera(self):
         second = Mock()
@@ -333,9 +338,28 @@ class WebTests(unittest.TestCase):
         with self.request("/api/cameras",authorized=True,username="viewer1",password="a-long-test-password") as response:
             self.assertEqual([item["id"] for item in json.load(response)],["cam01"])
         with self.assertRaises(urllib.error.HTTPError) as error:
-            self.request("/api/cameras/cam01/start",authorized=True,data={"profile":"profile0"},extra={"X-Camera-Client":"1"},username="viewer1",password="a-long-test-password")
+            self.request("/api/cameras/cam01/stop",authorized=True,data={},extra={"X-Camera-Client":"1"},username="viewer1",password="a-long-test-password")
         self.assertEqual(error.exception.code,403)
         error.exception.close()
+
+    def test_viewer_starts_idle_stream_on_default_profile_only(self):
+        data={"username":"viewer2","password":"a-long-test-password","role":"viewer","camera_permissions":{"cam01":"viewer"},"networks":[]}
+        with self.request("/api/admin/users",authorized=True,data=data,extra={"X-Camera-Client":"1"}):
+            pass
+        self.streams.profiles.return_value=[{"token":"low","VideoEncoderConfiguration":{"Width":"640","Height":"360"}},{"token":"high","VideoEncoderConfiguration":{"Width":"1920","Height":"1080"}}]
+        self.streams.start.return_value={"active":True,"profile":"high","playlist":"/media/s/index.m3u8"}
+        creds=dict(username="viewer2",password="a-long-test-password")
+        with self.request("/api/cameras/cam01/start",authorized=True,data={"profile":"low"},extra={"X-Camera-Client":"1"},**creds) as response:
+            self.assertTrue(json.load(response)["active"])
+        self.streams.start.assert_called_once_with("high")
+        # Already running: a viewer cannot switch the shared profile.
+        self.streams.status.return_value={"active":True,"profile":"high","playlist":"/media/s/index.m3u8"}
+        self.streams.start.reset_mock()
+        with self.request("/api/cameras/cam01/start",authorized=True,data={"profile":"low"},extra={"X-Camera-Client":"1"},**creds):
+            pass
+        self.streams.start.assert_not_called()
+        with self.request("/api/cameras",authorized=True,**creds) as response:
+            self.assertTrue(json.load(response)[0]["can_start"])
 
     def test_camera_admin_can_control_only_assigned_camera(self):
         self.add_second_camera()

@@ -13,6 +13,7 @@
       </button>
       <nav id="nav-menu" class="nav-menu" aria-label="Main navigation" hidden>
         <button id="nav-home" type="button">Home</button>
+        <a id="nav-watch" class="nav-link" href="/watch">Watch screen</a>
         <div class="nav-settings" hidden>
           <button id="nav-settings" type="button" aria-haspopup="true">Settings <span aria-hidden="true">›</span></button>
           <div class="settings-submenu">
@@ -91,9 +92,11 @@
         <label>Control camera IDs <input id="new-control-cameras" placeholder="cam01, 02 or ALL" maxlength="512" spellcheck="false"></label>
         <label>Allowed source IPs/CIDRs <input id="new-networks" placeholder="192.0.2.10/32, 192.0.2.11/32" maxlength="2048" spellcheck="false"></label>
         <label class="watcher-option"><input id="watcher-capability" type="checkbox"> Allow unattended monitoring session</label>
+        <label class="watcher-option"><input id="record-capability" type="checkbox" checked> Allow recording</label>
+        <label class="watcher-option"><input id="camera-link" type="checkbox"> Use this password to repair cameras that reject theirs</label>
       </div>
       <div class="form-actions"><button id="create-user" class="button-primary" type="button">Create account</button><button id="cancel-edit" type="button" hidden>Cancel edit</button></div>
-      <p class="help-text">Roles can be combined. Web administrators manage accounts and have access to every camera; camera administrators control assigned cameras; viewers can watch and record on assigned cameras. Separate IDs and source networks with commas, semicolons or spaces. Use ALL for every configured camera. Numeric suffixes such as 02 resolve to cam02. Passwords need 12 to 256 characters.</p>
+      <p class="help-text">Roles can be combined. Web administrators manage accounts and have access to every camera; camera administrators control assigned cameras; viewers can watch and record on assigned cameras. Separate IDs and source networks with commas, semicolons or spaces. Use ALL for every configured camera. Numeric suffixes such as 02 resolve to cam02. Source networks are optional; an empty list allows any address in the global allowlist. Passwords need 12 to 256 characters.</p>
       <h3 class="users-heading">Users</h3>
       <div id="user-list" class="admin-list"></div>
     </section>
@@ -104,5 +107,17 @@
   <button id="notice-close" type="button" aria-label="Dismiss message">×</button>
 </div>
 <script src="/vendor/hls.min.js"></script>
+  <dialog id="camera-credentials">
+    <form method="dialog" class="credentials-form">
+      <h2>Camera password rejected</h2>
+      <p>The camera <strong id="credentials-cameras"></strong> did not accept the saved credentials. The password may have changed in the camera app. Enter the current ones; Watchpost tests them on the camera before saving.</p>
+      <label>Apply to <select id="credentials-target"></select></label>
+      <label>Camera username <input id="credentials-user" value="admin" autocomplete="off" spellcheck="false"></label>
+      <label>Camera password <input id="credentials-password" type="password" autocomplete="off"></label>
+      <p id="credentials-error" class="help-text" role="alert"></p>
+      <label class="watcher-option"><input id="credentials-dismiss" type="checkbox"> Do not ask again for this failure</label>
+      <div class="form-actions"><button id="credentials-save" class="button-primary" type="button">Test and save</button><button id="credentials-skip" type="button">Not now</button></div>
+    </form>
+  </dialog>
 <script src="/app.js"></script>
 </html>

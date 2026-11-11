@@ -30,6 +30,18 @@ PTZ = "http://www.onvif.org/ver20/ptz/wsdl"
 SCHEMA = "http://www.onvif.org/ver10/schema"
 
 
+class CameraAuthError(ValueError):
+    """The camera rejected the configured credentials."""
+
+
+AUTH_FAULT_MARKERS = ("notauthorized", "not authorized", "sender not authorized", "unauthorized", "authentication")
+
+
+def looks_like_auth_failure(text):
+    lowered = (text or "").lower()
+    return "401" in lowered and "unauthorized" in lowered or any(marker in lowered for marker in AUTH_FAULT_MARKERS)
+
+
 def env_file(path):
     path = Path(path).expanduser()
     if path.stat().st_mode & 0o077:
@@ -115,12 +127,22 @@ class Camera:
         xml = f'<s:Envelope xmlns:s="{SOAP}"><s:Header>{header}</s:Header><s:Body>{body}</s:Body></s:Envelope>'
         request = urllib.request.Request(url, data=xml.encode(), headers={"Content-Type": "application/soap+xml; charset=utf-8", "Connection": "close"})
         try:
-            with self.opener.open(request, timeout=6) as response:
-                raw = response.read(2 * 1024 * 1024 + 1)
+            try:
+                with self.opener.open(request, timeout=6) as response:
+                    raw = response.read(2 * 1024 * 1024 + 1)
+            except urllib.error.HTTPError as error:
+                body = error.read(4096).decode(errors="replace") if error.fp else ""
+                error.close()
+                if error.code in (401, 403) or looks_like_auth_failure(body):
+                    raise CameraAuthError("camera rejected the credentials") from None
+                raise
             if len(raw) > 2 * 1024 * 1024:
                 raise ValueError("ONVIF response exceeds limit")
             root = ET.fromstring(raw)
-            if elements(root, "Fault"):
+            faults = elements(root, "Fault")
+            if faults:
+                if looks_like_auth_failure(" ".join(n.text or "" for n in faults[0].iter())):
+                    raise CameraAuthError("camera rejected the credentials")
                 raise ValueError("camera returned an ONVIF fault")
             return root
         finally:

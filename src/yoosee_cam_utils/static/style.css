@@ -187,3 +187,15 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
   .admin-item { grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "role" "cameras" "source" "actions"; }
   .admin-item-actions { justify-content: start; margin-top: 5px; }
 }
+.nav-link { display: block; padding: 8px 12px; color: inherit; text-decoration: none; }
+dialog { max-width: min(92vw, 440px); border: 1px solid #3a4a55; border-radius: 8px; background: #151d22; color: inherit; }
+dialog::backdrop { background: rgba(0, 0, 0, .6); }
+.credentials-form { display: grid; gap: 10px; }
+.credentials-form h2 { margin: 0; font-size: 1.1rem; }
+html:has(.watch-page) { height: 100%; overflow: hidden; }
+.watch-page { margin: 0; height: 100%; overflow: hidden; background: #000; }
+.watch-page .watch-grid { position: fixed; inset: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 480px), 1fr)); grid-auto-rows: minmax(0, 1fr); gap: 2px; width: auto; max-width: none; margin: 0; padding: 0; }
+.watch-tile { position: relative; min-width: 0; min-height: 0; margin: 0; overflow: hidden; background: #000; }
+.watch-tile video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.watch-tile figcaption { position: absolute; left: 8px; bottom: 6px; padding: 2px 8px; border-radius: 4px; background: rgba(0, 0, 0, .55); color: #dfe8ec; font-size: .85rem; }
+.watch-status { position: fixed; top: 8px; left: 8px; margin: 0; color: #dfe8ec; }
