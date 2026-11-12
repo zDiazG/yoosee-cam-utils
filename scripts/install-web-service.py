@@ -26,6 +26,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory={str(root).replace('%', '%%')}
 ExecStart={quote(root / "scripts/yoosee-web")} --config {quote(config)}
+ExecReload=/bin/kill -HUP $MAINPID
 Environment=PYTHONUNBUFFERED=1
 Environment=MALLOC_ARENA_MAX=2
 Environment=MALLOC_MMAP_THRESHOLD_=1048576
@@ -33,6 +34,10 @@ RuntimeDirectory=yoosee-cam-utils
 UMask=0077
 Nice=10
 MemoryMax=512M
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 KillMode=control-group
 TimeoutStopSec=10
 Restart=on-failure

@@ -9,12 +9,15 @@ queue.
 | Path | Responsibility |
 | --- | --- |
 | `src/yoosee_cam_utils/cli.py` | Configuration and credential loading, ONVIF SOAP client (`Camera`), RTSP input generation, `yoosee-cam` commands |
-| `src/yoosee_cam_utils/web.py` | HTTPS server, sessions, accounts (`UserStore`), per-camera live workers (`Streams`, `CameraRegistry`), request routing |
+| `src/yoosee_cam_utils/web.py` | HTTPS server, sessions, per-camera live workers (`Streams`, `CameraRegistry`), request routing, configuration reload |
+| `src/yoosee_cam_utils/accounts.py` | `UserStore`: accounts, roles, camera grants, source networks, persisted watcher sessions, schema migration |
+| `src/yoosee_cam_utils/admin_cli.py` | `yoosee-web users` and `networks` commands on the same database |
+| `src/yoosee_cam_utils/camera_credentials.py` | Saved camera credential overrides (0600 JSON beside the database) |
 | `src/yoosee_cam_utils/live.py` | `LiveBuffer`: parses FFmpeg's fragmented MP4 output and fans it out to browsers with bounded memory |
 | `src/yoosee_cam_utils/recording.py` | `ClipManager`: manual recording sessions, segment checks, spool quota, clip catalog |
 | `src/yoosee_cam_utils/static/` | Login page and viewer app (plain JavaScript, no framework) |
-| `scripts/` | Launchers, hls.js cache script, user service installer |
-| `tests/` | `unittest` suites with fake cameras and fake FFmpeg processes |
+| `scripts/` | Launchers, `setup.py` first-run script, hls.js cache script, user service installer |
+| `tests/` | `unittest` suites; `fakes.py` provides fake ONVIF cameras with offline, slow and authentication-failure modes |
 
 ## Camera access
 
@@ -63,8 +66,10 @@ catalog; there is no separate index.
 
 ## Requests and sessions
 
-`ViewerServer` is a `ThreadingHTTPServer` that wraps each connection in TLS 1.2 or
-newer. `Handler` routes requests by path:
+`ViewerServer` is a `ThreadingHTTPServer`. The accept thread only wraps the socket
+and checks the peer address against the allowlist, so clients outside it are closed
+before any TLS work. The handshake runs in the request thread, so one silent client
+cannot stall other connections. TLS is 1.2 or newer. `Handler` routes requests by path:
 
 - `/login`, `/login.js`, `/app.js`, `/style.css`, `/vendor/hls.min.js` are public
   static files with no account data.
@@ -74,9 +79,11 @@ newer. `Handler` routes requests by path:
   Mutations also need the `X-Camera-Client` header, a matching HTTPS `Origin` and
   the session's CSRF token.
 
-Sessions are random tokens kept in memory as SHA-256 digests, bound to the client
-address, and limited to 512 at a time. Each request reloads the account's grants
-from SQLite, so permission changes apply on the next request.
+Sessions are random tokens kept as SHA-256 digests, bound to the client address, and
+limited to 512 in memory. Watcher sessions are also stored in SQLite so they survive a
+restart. Each request reloads the account's grants and `session_version` from SQLite,
+so permission changes, password changes and disabling take effect on the next request,
+including from the command line.
 
 ## Stored state
 
@@ -84,12 +91,15 @@ from SQLite, so permission changes apply on the next request.
 | --- | --- | --- |
 | Camera list, web and recording settings | `config/local/cameras.toml` | Operator, read at startup |
 | Camera credentials | file named by `credentials_file`, mode 0600 | Operator |
-| Accounts, roles, grants, networks | `~/.local/state/yoosee-cam-utils/viewer-users.sqlite3`, mode 0600 | Web UI |
+| Accounts, roles, grants, networks, watcher sessions | `~/.local/state/yoosee-cam-utils/viewer-users.sqlite3`, mode 0600 | Web UI and `yoosee-web users` |
+| Camera credentials saved after a password change | `camera-credentials.json` beside the database, mode 0600 | Web administrators |
 | Live HLS segments | `~/.cache/yoosee-cam-utils/hls-runtime/` | Live workers, deleted on stop |
 | Clips and sidecars | `~/.local/state/yoosee-cam-utils/recordings/` | `ClipManager` |
 | TLS certificate and key | `~/.config/yoosee-cam-utils/tls/` | Operator |
 
-The TOML file is read once at startup. `allowed_networks` is merged into SQLite with
-insert-only semantics, and the first administrator is created only when the account
-table is empty. After that, accounts and networks are managed in SQLite. The
-[design notes](design.md#known-gaps) list the drift this causes.
+The TOML file is read at startup and on `SIGHUP`. Rows in `allowed_networks` carry a
+source: `config` rows follow the file, `admin` rows are managed in Settings or the CLI.
+Accounts are never declared in the file. The database has a schema version
+(`PRAGMA user_version`); older databases are migrated on start and the service logs
+what changed. With an empty account table the first sign-in that matches a configured
+camera's credentials, verified over ONVIF, creates the root administrator.
