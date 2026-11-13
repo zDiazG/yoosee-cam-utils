@@ -1,0 +1,27 @@
+name: brand-gate
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  brand-gate:
+    runs-on: ${{ fromJSON(vars.WATCHPOST_RUNS_ON || '"ubuntu-24.04"') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Shared gate and denylist from the umbrella (docs/upstream-import.md there).
+      - uses: zDiazG/watchpost-nvr/.github/actions/brand-gate@dev
+        with:
+          # Last commit before the gate; earlier history is not rescanned.
+          baseline: e86c311ea9b02ec09c6a4b870e4bbd90ccdf7eec
